@@ -860,6 +860,11 @@ class TransactionOperationsParser:
         DEFICIT_CREATED indicates bad debt write-off. When the asset is GHO,
         it's a GHO flash loan that requires a debt burn. For other assets,
         it's a standalone deficit event with no associated debt burn.
+
+        Note: DEFICIT_CREATED can also be emitted during GHO liquidations as
+        part of the bad debt write-off mechanism. In such cases, the GHO debt
+        burn should be matched to the LIQUIDATION_CALL operation, not a
+        separate flash loan operation.
         """
         user = self._decode_address(deficit_event["topics"][1])
         asset = self._decode_address(deficit_event["topics"][2])
@@ -867,9 +872,19 @@ class TransactionOperationsParser:
         # Check if this is a GHO deficit (flash loan) or non-GHO deficit
         is_gho_deficit = asset == GHO_TOKEN_ADDRESS
 
+        # Check if there's a LIQUIDATION_CALL for the same user in this transaction
+        # If so, this DEFICIT_CREATED is part of the liquidation, not a standalone flash loan
+        has_liquidation_for_user = False
+        for ev in all_events:
+            if ev["topics"][0] == AaveV3Event.LIQUIDATION_CALL.value:
+                liquidation_user = self._decode_address(ev["topics"][3])
+                if liquidation_user == user:
+                    has_liquidation_for_user = True
+                    break
+
         scaled_token_events = []
-        if is_gho_deficit:
-            # Find GHO debt burn for GHO flash loans
+        if is_gho_deficit and not has_liquidation_for_user:
+            # Find GHO debt burn for GHO flash loans only if not part of liquidation
             for ev in scaled_events:
                 if ev.event["logIndex"] in assigned_indices:
                     continue
@@ -878,11 +893,18 @@ class TransactionOperationsParser:
                     scaled_token_events.append(ev)
                     break
 
+        # If this DEFICIT_CREATED is part of a liquidation, mark it as UNKNOWN
+        # so it doesn't interfere with liquidation processing
+        if is_gho_deficit and has_liquidation_for_user:
+            operation_type = OperationType.UNKNOWN
+        elif is_gho_deficit:
+            operation_type = OperationType.GHO_FLASH_LOAN
+        else:
+            operation_type = OperationType.UNKNOWN
+
         return Operation(
             operation_id=operation_id,
-            operation_type=OperationType.GHO_FLASH_LOAN
-            if is_gho_deficit
-            else OperationType.UNKNOWN,
+            operation_type=operation_type,
             pool_event=deficit_event,
             scaled_token_events=scaled_token_events,
             transfer_events=[],
@@ -1070,10 +1092,10 @@ class TransactionOperationsParser:
 
         # Additional GHO-specific validation
         gho_burns = [e for e in op.scaled_token_events if e.event_type == "GHO_DEBT_BURN"]
-        if len(gho_burns) != 1:
+        if len(gho_burns) > 1:
             errors.append(
-                f"Expected 1 GHO debt burn for GHO_LIQUIDATION, got {len(gho_burns)}. "
-                f"DEBUG NOTE: Verify GHO token address matching."
+                f"Expected 0 or 1 GHO debt burn for GHO_LIQUIDATION, got {len(gho_burns)}. "
+                f"DEBUG NOTE: Dust liquidations may have 0 burns (zero debt to cover)."
             )
 
         return errors

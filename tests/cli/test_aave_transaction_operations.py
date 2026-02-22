@@ -824,3 +824,63 @@ class TestOperationValidation:
         # Validation should pass with 0 debt events
         tx_ops.validate([interest_mint_event, collateral_burn_event, repay_event])
         assert op.is_valid()
+
+    def test_gho_liquidation_dust_validates_with_zero_debt_burns(self):
+        """Dust GHO liquidation validates with 0 GHO debt burns (only collateral transfer).
+
+        Regression test for issue #0041 - Dust liquidations have debtToCover so small
+        (effectively zero) that no GHO debt principal is burned. Only collateral is transferred.
+        Transaction: 0x0ad468f0bd8e9b63a3cb464f27e686d28be9c3c54a7aee2791716388908cf769
+        """
+        user = get_checksum_address("0x1234567890123456789012345678901234567890")
+        collateral_asset = get_checksum_address("0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2")
+
+        # Dust liquidation pattern:
+        # 1. LIQUIDATION_CALL pool event
+        # 2. Collateral transfer to liquidator - assigned to liquidation
+        # No GHO debt burn because debtToCover rounds to zero
+        # Interest mints are separate operations not associated with liquidation
+
+        liquidation_event = EventFactory.create_liquidation_call_event(
+            collateral_asset=collateral_asset,
+            debt_asset=GHO_TOKEN_ADDRESS,
+            user=user,
+            debt_to_cover=0,  # Dust amount
+            liquidated_collateral=300000000000000000,
+            log_index=404,
+        )
+
+        # For dust liquidation, collateral is transferred (not burned)
+        collateral_transfer_event = EventFactory.create_collateral_balance_transfer_event(
+            from_user=user,
+            to_user=get_checksum_address("0xf00E2de0E78DFf055A92AD4719a179CE275b6Ef7"),
+            amount=300000000000000000,
+            log_index=400,
+        )
+
+        # Update the token type mapping to include the collateral asset
+        test_mapping = TEST_TOKEN_TYPE_MAPPING.copy()
+        test_mapping[collateral_asset] = "aToken"
+
+        parser = TransactionOperationsParser(token_type_mapping=test_mapping)
+        tx_ops = parser.parse(
+            [liquidation_event, collateral_transfer_event],
+            HexBytes("0x" + "00" * 32),
+        )
+
+        # Should have 1 operation (GHO_LIQUIDATION)
+        assert len(tx_ops.operations) == 1
+        op = tx_ops.operations[0]
+        assert op.operation_type == OperationType.GHO_LIQUIDATION
+
+        # Should have 0 GHO debt burns and 1 collateral transfer
+        gho_burns = [e for e in op.scaled_token_events if e.event_type == "GHO_DEBT_BURN"]
+        collateral_transfers = [
+            e for e in op.scaled_token_events if e.event_type == "COLLATERAL_TRANSFER"
+        ]
+        assert len(gho_burns) == 0, "Dust liquidation should have 0 GHO debt burns"
+        assert len(collateral_transfers) == 1, "Should have 1 collateral transfer"
+
+        # Validation should pass - no exception raised
+        tx_ops.validate([liquidation_event, collateral_transfer_event])
+        assert op.is_valid()
