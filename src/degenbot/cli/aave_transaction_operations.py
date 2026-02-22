@@ -438,6 +438,11 @@ class TransactionOperationsParser:
                 if ev:
                     result.append(ev)
 
+            elif topic == AaveV3Event.SCALED_TOKEN_BALANCE_TRANSFER.value:
+                ev = self._decode_balance_transfer_event(event)
+                if ev:
+                    result.append(ev)
+
         return sorted(result, key=lambda e: e.event["logIndex"])
 
     def _decode_mint_event(self, event: LogReceipt) -> ScaledTokenEvent | None:
@@ -511,6 +516,48 @@ class TransactionOperationsParser:
                 target_address=target,
                 amount=amount,
                 balance_increase=balance_increase,
+                index=index,
+            )
+        except Exception:
+            return None
+
+    def _decode_balance_transfer_event(self, event: LogReceipt) -> ScaledTokenEvent | None:
+        """Decode a BalanceTransfer event.
+
+        BalanceTransfer events represent internal scaled balance movements in aTokens.
+        During liquidations, collateral may be transferred to the treasury instead of burned.
+        """
+        try:
+            from_addr = get_checksum_address("0x" + event["topics"][1].hex()[-40:])
+            to_addr = get_checksum_address("0x" + event["topics"][2].hex()[-40:])
+            # BalanceTransfer data: amount, index
+            amount, index = eth_abi.decode(["uint256", "uint256"], event["data"])
+
+            # Determine event type based on token type
+            token_address = get_checksum_address(event["address"])
+            if token_address == self.gho_token_address:
+                # GHO doesn't have BalanceTransfer events, but handle just in case
+                event_type = "GHO_DEBT_TRANSFER"
+            else:
+                # Use token type mapping to determine if this is collateral or debt
+                token_type = self.token_type_mapping.get(token_address)
+                if token_type == "aToken":
+                    event_type = "COLLATERAL_TRANSFER"
+                elif token_type == "vToken":
+                    event_type = "DEBT_TRANSFER"
+                else:
+                    # Fallback for unknown tokens
+                    event_type = "UNKNOWN_TRANSFER"
+
+            return ScaledTokenEvent(
+                event=event,
+                event_type=event_type,
+                user_address=from_addr,  # The user whose balance decreased
+                caller_address=None,
+                from_address=from_addr,
+                target_address=to_addr,
+                amount=amount,
+                balance_increase=0,  # BalanceTransfer doesn't have balanceIncrease
                 index=index,
             )
         except Exception:
@@ -685,10 +732,7 @@ class TransactionOperationsParser:
         is_gho = reserve == GHO_TOKEN_ADDRESS
 
         # Find debt burn (normal case)
-        # For repayWithATokens, also look for debt mint when interest exceeds repayment
-        # because the net debt can actually increase in that edge case
         debt_burn = None
-        debt_mint = None
         for ev in scaled_events:
             if ev.event["logIndex"] in assigned_indices:
                 continue
@@ -703,14 +747,10 @@ class TransactionOperationsParser:
                     if ev.user_address == user:
                         debt_burn = ev
                         break
-                elif ev.event_type == "DEBT_MINT":
-                    if ev.user_address == user:
-                        debt_mint = ev
 
         scaled_token_events = [debt_burn] if debt_burn else []
 
-        # If use_a_tokens, also look for collateral burn and include debt mint if present
-        # (debt mint occurs when interest exceeds repayment in repayWithATokens)
+        # If use_a_tokens, also look for collateral burn
         if use_a_tokens and not is_gho:
             collateral_burn = None
             for ev in scaled_events:
@@ -722,9 +762,10 @@ class TransactionOperationsParser:
 
             if collateral_burn:
                 scaled_token_events.append(collateral_burn)
-                # For repayWithATokens, also include debt mint if present (interest > repayment case)
-                if debt_mint:
-                    scaled_token_events.append(debt_mint)
+                # Note: We intentionally do NOT include debt_mint here.
+                # The debt_mint is for interest accrual and should be a separate
+                # operation or handled as unassigned, not grouped with this
+                # repayWithATokens operation which should only have 1 debt event.
                 op_type = OperationType.REPAY_WITH_ATOKENS
             else:
                 op_type = OperationType.REPAY
@@ -769,8 +810,10 @@ class TransactionOperationsParser:
                     debt_burn = ev
                     break
 
-        # Find collateral burn
+        # Find collateral burn or transfer
+        # During liquidations, collateral may be burned OR transferred to treasury
         collateral_burn = None
+        collateral_transfer = None
         for ev in scaled_events:
             if ev.event["logIndex"] in assigned_indices:
                 continue
@@ -779,12 +822,19 @@ class TransactionOperationsParser:
                 if ev.user_address == user:
                     collateral_burn = ev
                     break
+            elif ev.event_type == "COLLATERAL_TRANSFER":
+                if ev.user_address == user:
+                    collateral_transfer = ev
+                    break
 
         scaled_token_events = []
         if debt_burn:
             scaled_token_events.append(debt_burn)
         if collateral_burn:
             scaled_token_events.append(collateral_burn)
+        elif collateral_transfer:
+            # Collateral transferred to treasury during liquidation
+            scaled_token_events.append(collateral_transfer)
 
         op_type = OperationType.GHO_LIQUIDATION if is_gho else OperationType.LIQUIDATION
 
@@ -805,26 +855,34 @@ class TransactionOperationsParser:
         all_events: list[LogReceipt],
         assigned_indices: set[int],
     ) -> Operation:
-        """Create DEFICIT_CREATED (flash loan) operation."""
-        # DEFICIT_CREATED always indicates GHO flash loan
+        """Create DEFICIT_CREATED operation.
+
+        DEFICIT_CREATED indicates bad debt write-off. When the asset is GHO,
+        it's a GHO flash loan that requires a debt burn. For other assets,
+        it's a standalone deficit event with no associated debt burn.
+        """
         user = self._decode_address(deficit_event["topics"][1])
         asset = self._decode_address(deficit_event["topics"][2])
 
-        # Find GHO debt burn
-        gho_burn = None
-        for ev in scaled_events:
-            if ev.event["logIndex"] in assigned_indices:
-                continue
+        # Check if this is a GHO deficit (flash loan) or non-GHO deficit
+        is_gho_deficit = asset == GHO_TOKEN_ADDRESS
 
-            if ev.event_type == "GHO_DEBT_BURN" and ev.user_address == user:
-                gho_burn = ev
-                break
+        scaled_token_events = []
+        if is_gho_deficit:
+            # Find GHO debt burn for GHO flash loans
+            for ev in scaled_events:
+                if ev.event["logIndex"] in assigned_indices:
+                    continue
 
-        scaled_token_events = [gho_burn] if gho_burn else []
+                if ev.event_type == "GHO_DEBT_BURN" and ev.user_address == user:
+                    scaled_token_events.append(ev)
+                    break
 
         return Operation(
             operation_id=operation_id,
-            operation_type=OperationType.GHO_FLASH_LOAN,
+            operation_type=OperationType.GHO_FLASH_LOAN
+            if is_gho_deficit
+            else OperationType.UNKNOWN,
             pool_event=deficit_event,
             scaled_token_events=scaled_token_events,
             transfer_events=[],
@@ -942,12 +1000,16 @@ class TransactionOperationsParser:
             errors.append("Missing REPAY pool event")
             return errors
 
-        # Should have 1 debt burn and 1 collateral burn
-        debt_burns = [e for e in op.scaled_token_events if e.is_debt]
-        collateral_burns = [e for e in op.scaled_token_events if e.is_collateral]
+        # Should have 0 or 1 debt events (burn or mint) and 1 collateral burn
+        # Note: When interest exceeds repayment, debt mints instead of burns
+        # Note: In some edge cases, debt burn may not be emitted if debt is fully covered by interest
+        debt_events = [e for e in op.scaled_token_events if e.is_debt]
+        collateral_burns = [e for e in op.scaled_token_events if e.is_collateral and e.is_burn]
 
-        if len(debt_burns) != 1:
-            errors.append(f"Expected 1 debt burn for REPAY_WITH_ATOKENS, got {len(debt_burns)}")
+        if len(debt_events) > 1:
+            errors.append(
+                f"Expected 0 or 1 debt events for REPAY_WITH_ATOKENS, got {len(debt_events)}"
+            )
         if len(collateral_burns) != 1:
             errors.append(
                 f"Expected 1 collateral burn for REPAY_WITH_ATOKENS, got {len(collateral_burns)}"
@@ -977,24 +1039,26 @@ class TransactionOperationsParser:
             errors.append("Missing LIQUIDATION_CALL pool event")
             return errors
 
-        # Should have exactly 1 debt burn and 1 collateral burn
+        # Should have 1 collateral event (burn or transfer) and 0 or 1 debt burns
+        # Flash loan liquidations have 0 debt burns (debt repaid via flash loan)
+        # Standard liquidations have 1 debt burn
+        # Collateral may be burned OR transferred to treasury (BalanceTransfer)
         debt_burns = [e for e in op.scaled_token_events if e.is_debt]
-        collateral_burns = [e for e in op.scaled_token_events if e.is_collateral]
+        collateral_events = [e for e in op.scaled_token_events if e.is_collateral]
 
-        if len(debt_burns) != 1:
+        if len(debt_burns) > 1:
             errors.append(
-                f"Expected 1 debt burn for LIQUIDATION, got {len(debt_burns)}. "
-                f"DEBUG NOTE: Check if this is a partial liquidation or if debt/collateral "
-                f"events are being assigned to wrong operations. "
+                f"Expected 0 or 1 debt burns for LIQUIDATION, got {len(debt_burns)}. "
+                f"DEBUG NOTE: Check if debt/collateral events are being assigned to wrong operations. "
                 f"Current debt burns: {[e.event['logIndex'] for e in debt_burns]}. "
                 f"User in LIQUIDATION_CALL: {self._decode_address(op.pool_event['topics'][3])}"
             )
 
-        if len(collateral_burns) != 1:
+        if len(collateral_events) != 1:
             errors.append(
-                f"Expected 1 collateral burn for LIQUIDATION, got {len(collateral_burns)}. "
+                f"Expected 1 collateral event (burn or transfer) for LIQUIDATION, got {len(collateral_events)}. "
                 f"DEBUG NOTE: Check collateral asset matching and user address consistency. "
-                f"Current collateral burns: {[e.event['logIndex'] for e in collateral_burns]}. "
+                f"Current collateral events: {[e.event['logIndex'] for e in collateral_events]}. "
                 f"User in LIQUIDATION_CALL: {self._decode_address(op.pool_event['topics'][3])}"
             )
 

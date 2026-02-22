@@ -11,6 +11,7 @@ from web3.types import LogReceipt
 
 from degenbot.checksum_cache import get_checksum_address
 from degenbot.cli.aave_transaction_operations import (
+    GHO_TOKEN_ADDRESS,
     GHO_VARIABLE_DEBT_TOKEN_ADDRESS,
     AaveV3Event,
     OperationType,
@@ -287,6 +288,33 @@ class EventFactory:
             "transactionHash": HexBytes("0x" + "00" * 32),
         }
 
+    @staticmethod
+    def create_collateral_balance_transfer_event(
+        from_user: str, to_user: str, amount: int, log_index: int
+    ) -> LogReceipt:
+        """Create a collateral BalanceTransfer event."""
+
+        topics = [
+            AaveV3Event.SCALED_TOKEN_BALANCE_TRANSFER.value,
+            HexBytes("0x" + "0" * 24 + from_user[2:]),
+            HexBytes("0x" + "0" * 24 + to_user[2:]),
+        ]
+
+        # BalanceTransfer data: amount, index
+        data = eth_abi.encode(
+            ["uint256", "uint256"],
+            [amount, 1000000000000000000000000000],
+        )
+
+        return {
+            "address": TEST_COLLATERAL_TOKEN,
+            "topics": topics,
+            "data": HexBytes(data),
+            "logIndex": log_index,
+            "blockNumber": 1000000,
+            "transactionHash": HexBytes("0x" + "00" * 32),
+        }
+
 
 class TestOperationParsing:
     """Test parsing transactions into operations."""
@@ -419,9 +447,11 @@ class TestOperationParsing:
         collateral_asset = get_checksum_address("0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2")
 
         # Create events
+        # Note: debt_asset should be GHO_TOKEN_ADDRESS (the GHO token),
+        # not GHO_VARIABLE_DEBT_TOKEN_ADDRESS (the debt token contract)
         liquidation_event = EventFactory.create_liquidation_call_event(
             collateral_asset=collateral_asset,
-            debt_asset=GHO_VARIABLE_DEBT_TOKEN_ADDRESS,
+            debt_asset=GHO_TOKEN_ADDRESS,
             user=user,
             debt_to_cover=500000000000000000,
             liquidated_collateral=300000000000000000,
@@ -442,7 +472,7 @@ class TestOperationParsing:
             log_index=104,
         )
 
-        parser = TransactionOperationsParser()
+        parser = TransactionOperationsParser(token_type_mapping=TEST_TOKEN_TYPE_MAPPING)
         tx_ops = parser.parse(
             [gho_burn_event, liquidation_event, collateral_burn_event],
             HexBytes("0x" + "00" * 32),
@@ -539,15 +569,33 @@ class TestOperationValidation:
             tx_ops.validate([debt_burn_event, liquidation_event])
 
         error_str = str(exc_info.value)
-        assert "Expected 1 collateral burn" in error_str
+        assert "Expected 1 collateral event" in error_str
         assert "DEBUG NOTE" in error_str
         assert "logIndex" in error_str
 
-    def test_validation_fails_on_missing_debt_burn(self):
-        """Missing debt burn in liquidation causes validation error."""
+    def test_flash_loan_liquidation_validates_with_zero_debt_burns(self):
+        """Flash loan liquidation validates with 0 debt burns (only collateral burn).
+
+        Regression test for issue #0033 - Flash loan liquidations don't emit debt burn events
+        because the debt is repaid via flash loan mechanics rather than standard debt token burns.
+        Transaction: 0xcb087ea4d8d1b7c890318c3eccd7f730f24a1f1b55b25c156b9649e543de0588
+        """
         user = get_checksum_address("0x1234567890123456789012345678901234567890")
         collateral_asset = get_checksum_address("0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2")
         debt_asset = get_checksum_address("0xA0b86a33E6441e6C7D3D4B4b8B8B8B8B8B8B8B8B")
+
+        # Flash loan liquidation pattern:
+        # 1. Debt mint (flash borrow) - not assigned to liquidation operation
+        # 2. Collateral burn - assigned to liquidation operation
+        # 3. LiquidationCall - the pool event
+        # No debt burn because flash loan is repaid through swap, not burn
+
+        debt_mint_event = EventFactory.create_debt_mint_event(
+            user=user,
+            amount=500000000000000000,
+            balance_increase=500000000000000000,
+            log_index=97,
+        )
 
         liquidation_event = EventFactory.create_liquidation_call_event(
             collateral_asset=collateral_asset,
@@ -558,8 +606,6 @@ class TestOperationValidation:
             log_index=100,
         )
 
-        # Missing debt burn!
-
         collateral_burn_event = EventFactory.create_collateral_burn_event(
             user=user,
             amount=300000000000000000,
@@ -567,17 +613,25 @@ class TestOperationValidation:
             log_index=104,
         )
 
-        parser = TransactionOperationsParser()
+        parser = TransactionOperationsParser(token_type_mapping=TEST_TOKEN_TYPE_MAPPING)
         tx_ops = parser.parse(
-            [liquidation_event, collateral_burn_event],
+            [debt_mint_event, liquidation_event, collateral_burn_event],
             HexBytes("0x" + "00" * 32),
         )
 
-        with pytest.raises(TransactionValidationError) as exc_info:
-            tx_ops.validate([liquidation_event, collateral_burn_event])
+        # Should have 1 operation (LIQUIDATION)
+        assert len(tx_ops.operations) == 1
+        op = tx_ops.operations[0]
+        assert op.operation_type == OperationType.LIQUIDATION
 
-        error_str = str(exc_info.value)
-        assert "Expected 1 debt burn" in error_str
+        # Should have 0 debt burns and 1 collateral burn
+        debt_burns = [e for e in op.scaled_token_events if e.is_debt]
+        collateral_burns = [e for e in op.scaled_token_events if e.is_collateral]
+        assert len(debt_burns) == 0
+        assert len(collateral_burns) == 1
+
+        # Validation should pass - no exception raised
+        tx_ops.validate([debt_mint_event, liquidation_event, collateral_burn_event])
 
     def test_repay_with_zero_debt_burns_validates(self):
         """Interest-only repayment has 0 debt burns (only interest accrual mint)."""
@@ -656,4 +710,117 @@ class TestOperationValidation:
 
         # Validation should pass with 1 burn - no exception raised
         tx_ops.validate([debt_burn_event, repay_event])
+        assert op.is_valid()
+
+    def test_liquidation_with_collateral_transfer_validates(self):
+        """Liquidation where collateral is transferred to treasury instead of burned.
+
+        Regression test for issue #0034
+        Transaction: 0x621380dc92a951489f4717300d242ad2db640be2d2be5eb66e108b455cccaad2
+        Block: 19904828
+
+        In some liquidations, the protocol takes a liquidation fee by transferring
+        collateral to the treasury via SCALED_TOKEN_BALANCE_TRANSFER instead of
+        burning it. The validation must accept either burns OR transfers.
+        """
+        user = get_checksum_address("0x4835C915243Ea1d094B17f5E4115e371e4880717")
+        treasury = get_checksum_address("0x464C71f6c2F760DdA6093dCB91C24c39e5d6e18c")
+        collateral_asset = get_checksum_address("0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48")
+        debt_asset = get_checksum_address("0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2")
+
+        # Interest accrual mint (happens before liquidation)
+        interest_mint = EventFactory.create_collateral_mint_event(
+            user=user,
+            amount=4941689,  # Small interest amount
+            balance_increase=4941689,
+            log_index=7,
+        )
+
+        # Collateral transferred to treasury (liquidation fee)
+        collateral_transfer = EventFactory.create_collateral_balance_transfer_event(
+            from_user=user,
+            to_user=treasury,
+            amount=35,  # Small liquidation fee
+            log_index=12,
+        )
+
+        liquidation_event = EventFactory.create_liquidation_call_event(
+            collateral_asset=collateral_asset,
+            debt_asset=debt_asset,
+            user=user,
+            debt_to_cover=1350043617,
+            liquidated_collateral=4231,
+            log_index=14,
+        )
+
+        parser = TransactionOperationsParser(token_type_mapping=TEST_TOKEN_TYPE_MAPPING)
+        tx_ops = parser.parse(
+            [interest_mint, collateral_transfer, liquidation_event],
+            HexBytes("0x" + "00" * 32),
+        )
+
+        # Should have 1 operation (LIQUIDATION)
+        assert len(tx_ops.operations) == 1
+        op = tx_ops.operations[0]
+        assert op.operation_type == OperationType.LIQUIDATION
+
+        # Should have 1 collateral event (the transfer, not a burn)
+        collateral_events = [e for e in op.scaled_token_events if e.is_collateral]
+        assert len(collateral_events) == 1
+        assert collateral_events[0].event_type == "COLLATERAL_TRANSFER"
+
+        # Validation should pass - no exception raised
+        tx_ops.validate([interest_mint, collateral_transfer, liquidation_event])
+        assert op.is_valid()
+
+    def test_repay_with_atokens_zero_debt_events(self):
+        """REPAY_WITH_ATOKENS with 0 debt events (interest-only repayment edge case).
+
+        Edge case where accrued interest covers the debt, so no debt burn event
+        is emitted by Aave's _burnScaled function. Transaction at 0x3482a0ec...
+        demonstrated this behavior.
+        """
+        user = get_checksum_address("0x1234567890123456789012345678901234567890")
+        reserve = get_checksum_address("0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48")
+
+        # Create events - NO debt burn event (only interest mint + collateral burn + repay)
+        interest_mint_event = EventFactory.create_debt_mint_event(
+            user=user,
+            amount=14224026,  # Interest accrued
+            balance_increase=14224026,
+            log_index=448,
+        )
+
+        collateral_burn_event = EventFactory.create_collateral_burn_event(
+            user=user,
+            amount=1905745357,  # ~1,904 USDC
+            balance_increase=14224026,
+            log_index=451,
+        )
+
+        repay_event = EventFactory.create_repay_event(
+            reserve=reserve,
+            user=user,
+            amount=1905745357,
+            use_a_tokens=True,
+            log_index=452,
+        )
+
+        parser = TransactionOperationsParser(token_type_mapping=TEST_TOKEN_TYPE_MAPPING)
+        tx_ops = parser.parse(
+            [interest_mint_event, collateral_burn_event, repay_event],
+            HexBytes("0x" + "00" * 32),
+        )
+
+        assert len(tx_ops.operations) == 1
+        op = tx_ops.operations[0]
+
+        assert op.operation_type == OperationType.REPAY_WITH_ATOKENS
+        # Should have only 1 scaled token event (the collateral burn)
+        # The interest mint is not matched to this operation
+        assert len(op.scaled_token_events) == 1
+        assert op.scaled_token_events[0].event_type == "COLLATERAL_BURN"
+
+        # Validation should pass with 0 debt events
+        tx_ops.validate([interest_mint_event, collateral_burn_event, repay_event])
         assert op.is_valid()
