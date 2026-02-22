@@ -33,6 +33,7 @@ from hexbytes import HexBytes
 from web3.types import LogReceipt
 
 from degenbot.checksum_cache import get_checksum_address
+from degenbot.cli.aave_transaction_operations import Operation, OperationType, ScaledTokenEvent
 from degenbot.exceptions import DegenbotValueError
 from degenbot.logging import logger
 
@@ -296,9 +297,9 @@ class EventMatcher:
         """
         if config.consumption_policy == EventConsumptionPolicy.CONSUMABLE:
             return True
-        elif config.consumption_policy == EventConsumptionPolicy.REUSABLE:
+        if config.consumption_policy == EventConsumptionPolicy.REUSABLE:
             return False
-        elif config.consumption_policy == EventConsumptionPolicy.CONDITIONAL:
+        if config.consumption_policy == EventConsumptionPolicy.CONDITIONAL:
             if config.consumption_condition is not None:
                 return config.consumption_condition(pool_event)
             return True
@@ -356,18 +357,18 @@ class EventMatcher:
                 and interest_rate_mode == 2  # Variable rate
             )
 
-        elif expected_type == AaveV3Event.REPAY:
+        if expected_type == AaveV3Event.REPAY:
             if event_topic == AaveV3Event.REPAY.value:
                 # REPAY: topics[1]=reserve, topics[2]=user
                 event_reserve = _decode_address(pool_event["topics"][1])
                 event_user = _decode_address(pool_event["topics"][2])
                 return event_user == user_address and event_reserve == reserve_address
-            elif event_topic == AaveV3Event.LIQUIDATION_CALL.value:
+            if event_topic == AaveV3Event.LIQUIDATION_CALL.value:
                 # Liquidation matching - match on debtAsset
                 event_debt_asset = _decode_address(pool_event["topics"][2])
                 event_user = _decode_address(pool_event["topics"][3])
                 return event_user == user_address and event_debt_asset == reserve_address
-            elif event_topic == AaveV3Event.DEFICIT_CREATED.value:
+            if event_topic == AaveV3Event.DEFICIT_CREATED.value:
                 # DeficitCreated matching - debt written off
                 event_user = _decode_address(pool_event["topics"][1])
                 event_reserve = _decode_address(pool_event["topics"][2])
@@ -389,7 +390,7 @@ class EventMatcher:
                 event_reserve = _decode_address(pool_event["topics"][1])
                 event_user = _decode_address(pool_event["topics"][2])
                 return event_user == user_address and event_reserve == reserve_address
-            elif event_topic == AaveV3Event.LIQUIDATION_CALL.value:
+            if event_topic == AaveV3Event.LIQUIDATION_CALL.value:
                 # Liquidation matching - match on collateralAsset
                 event_collateral_asset = _decode_address(pool_event["topics"][1])
                 event_user = _decode_address(pool_event["topics"][3])
@@ -475,7 +476,7 @@ class EventMatcher:
                         continue
 
                     if self._is_consumed(pool_event):
-                        print(
+                        logger.warning(
                             f"DEBUG: Skipping - event already consumed at logIndex {pool_event['logIndex']}"
                         )
                         continue
@@ -508,8 +509,10 @@ class EventMatcher:
         )
         return None
 
+    @staticmethod
     def _extract_event_data(
-        self, pool_event: LogReceipt, event_type: ScaledTokenEventType
+        pool_event: LogReceipt,
+        event_type: ScaledTokenEventType,
     ) -> dict[str, int]:
         """Extract relevant data from a matched pool event.
 
@@ -736,3 +739,256 @@ def _should_consume_gho_debt_burn_pool_event(pool_event: LogReceipt) -> bool:
 def _decode_address(topic: HexBytes) -> ChecksumAddress:
     """Decode a 32-byte topic to a checksummed address."""
     return get_checksum_address("0x" + topic.hex()[-40:])
+
+
+# ============================================================================
+# OPERATION-AWARE EVENT MATCHER
+# ============================================================================
+
+
+class OperationAwareEventMatcher:
+    """Event matcher that works within operation context.
+
+    This matcher uses pre-parsed operation context to determine matches,
+    eliminating the need for max_log_index and temporal ordering checks.
+    """
+
+    def __init__(self, operation: Operation):
+        """Initialize matcher with operation context.
+
+        Args:
+            operation: The operation containing the pool event and scaled events.
+        """
+        self.operation = operation
+
+    def find_match(
+        self,
+        scaled_event: ScaledTokenEvent,
+    ) -> EventMatchResult | None:
+        """Find pool event match within operation context.
+
+        Unlike the legacy EventMatcher, this doesn't need max_log_index
+        because the operation already groups related events together.
+
+        Args:
+            scaled_event: The scaled token event to match.
+
+        Returns:
+            EventMatchResult with pool_event, should_consume flag, and extraction_data,
+            or None if no match found.
+        """
+        if self.operation.pool_event is None:
+            return None
+
+        # Pattern-aware matching based on operation type
+        matchers = {
+            OperationType.SUPPLY: self._match_supply,
+            OperationType.WITHDRAW: self._match_withdraw,
+            OperationType.BORROW: self._match_borrow,
+            OperationType.GHO_BORROW: self._match_gho_borrow,
+            OperationType.REPAY: self._match_repay,
+            OperationType.REPAY_WITH_ATOKENS: self._match_repay_with_atokens,
+            OperationType.GHO_REPAY: self._match_gho_repay,
+            OperationType.LIQUIDATION: self._match_liquidation,
+            OperationType.GHO_LIQUIDATION: self._match_gho_liquidation,
+            OperationType.GHO_FLASH_LOAN: self._match_flash_loan,
+        }
+
+        matcher = matchers.get(self.operation.operation_type)
+        if matcher:
+            return matcher(scaled_event)
+
+        # Default matching for unknown operation types
+        return self._default_match(scaled_event)
+
+    def _match_supply(self, scaled_event: ScaledTokenEvent) -> EventMatchResult:
+        """Match supply operation."""
+        return EventMatchResult(
+            pool_event=self.operation.pool_event,
+            should_consume=True,  # SUPPLY is single-purpose
+            extraction_data=self._extract_supply_data(),
+        )
+
+    def _match_withdraw(self, scaled_event: ScaledTokenEvent) -> EventMatchResult:
+        """Match withdraw operation."""
+        return EventMatchResult(
+            pool_event=self.operation.pool_event,
+            should_consume=True,  # WITHDRAW is single-purpose
+            extraction_data=self._extract_withdraw_data(),
+        )
+
+    def _match_borrow(self, scaled_event: ScaledTokenEvent) -> EventMatchResult:
+        """Match borrow operation."""
+        return EventMatchResult(
+            pool_event=self.operation.pool_event,
+            should_consume=True,  # BORROW is single-purpose
+            extraction_data=self._extract_borrow_data(),
+        )
+
+    def _match_gho_borrow(self, scaled_event: ScaledTokenEvent) -> EventMatchResult:
+        """Match GHO borrow operation."""
+        return EventMatchResult(
+            pool_event=self.operation.pool_event,
+            should_consume=True,  # GHO BORROW is single-purpose
+            extraction_data=self._extract_borrow_data(),
+        )
+
+    def _match_repay(self, scaled_event: ScaledTokenEvent) -> EventMatchResult:
+        """Match repay operation."""
+        # Extract useATokens to determine consumption
+        extraction_data = self._extract_repay_data()
+        use_a_tokens = extraction_data.get("use_a_tokens", False)
+
+        # REPAY is consumed only if useATokens=False
+        should_consume = not use_a_tokens
+
+        return EventMatchResult(
+            pool_event=self.operation.pool_event,
+            should_consume=should_consume,
+            extraction_data=extraction_data,
+        )
+
+    def _match_repay_with_atokens(self, scaled_event: ScaledTokenEvent) -> EventMatchResult:
+        """Match repay with aTokens operation.
+
+        In this operation, the REPAY event is shared between:
+        - Debt burn (vToken burn)
+        - Collateral burn (aToken burn)
+
+        The REPAY event should NOT be consumed.
+        """
+        extraction_data = self._extract_repay_data()
+
+        return EventMatchResult(
+            pool_event=self.operation.pool_event,
+            should_consume=False,  # Shared across debt and collateral burns
+            extraction_data=extraction_data,
+        )
+
+    def _match_gho_repay(self, scaled_event: ScaledTokenEvent) -> EventMatchResult:
+        """Match GHO repay operation."""
+        return EventMatchResult(
+            pool_event=self.operation.pool_event,
+            should_consume=True,  # GHO REPAY is single-purpose (no useATokens)
+            extraction_data=self._extract_repay_data(),
+        )
+
+    def _match_liquidation(self, scaled_event: ScaledTokenEvent) -> EventMatchResult:
+        """Match liquidation operation.
+
+        In liquidation, the LIQUIDATION_CALL event is shared between:
+        - Debt burn (debt repayment)
+        - Collateral burn (collateral seized)
+
+        The LIQUIDATION_CALL event should NOT be consumed.
+        """
+        return EventMatchResult(
+            pool_event=self.operation.pool_event,
+            should_consume=False,  # Shared across debt and collateral burns
+            extraction_data=self._extract_liquidation_data(),
+        )
+
+    def _match_gho_liquidation(self, scaled_event: ScaledTokenEvent) -> EventMatchResult:
+        """Match GHO liquidation operation.
+
+        Same as standard liquidation - LIQUIDATION_CALL is shared.
+        """
+        return EventMatchResult(
+            pool_event=self.operation.pool_event,
+            should_consume=False,  # Shared across burns
+            extraction_data=self._extract_liquidation_data(),
+        )
+
+    def _match_flash_loan(self, scaled_event: ScaledTokenEvent) -> EventMatchResult:
+        """Match flash loan (DEFICIT_CREATED) operation."""
+        return EventMatchResult(
+            pool_event=self.operation.pool_event,
+            should_consume=False,  # DEFICIT_CREATED is reusable
+            extraction_data=self._extract_deficit_data(),
+        )
+
+    def _default_match(self, scaled_event: ScaledTokenEvent) -> EventMatchResult | None:
+        """Default matching for unknown operation types."""
+        if self.operation.pool_event is None:
+            return None
+
+        return EventMatchResult(
+            pool_event=self.operation.pool_event,
+            should_consume=True,  # Default to consumable
+            extraction_data={},
+        )
+
+    def _extract_supply_data(self) -> dict[str, int]:
+        """Extract data from SUPPLY event."""
+        # SUPPLY: data=(address caller, uint256 amount)
+        caller, raw_amount = eth_abi.decode(
+            types=["address", "uint256"],
+            data=self.operation.pool_event["data"],
+        )
+        return {
+            "raw_amount": raw_amount,
+            "caller": caller,
+        }
+
+    def _extract_withdraw_data(self) -> dict[str, int]:
+        """Extract data from WITHDRAW event."""
+        # WITHDRAW: data=(uint256 amount)
+        raw_amount = eth_abi.decode(
+            types=["uint256"],
+            data=self.operation.pool_event["data"],
+        )[0]
+        return {
+            "raw_amount": raw_amount,
+        }
+
+    def _extract_borrow_data(self) -> dict[str, int]:
+        """Extract data from BORROW event."""
+        # BORROW: data=(address caller, uint256 amount, uint8 interestRateMode, uint256 borrowRate)
+        caller, raw_amount, interest_rate_mode, borrow_rate = eth_abi.decode(
+            types=["address", "uint256", "uint8", "uint256"],
+            data=self.operation.pool_event["data"],
+        )
+        return {
+            "raw_amount": raw_amount,
+            "caller": caller,
+            "interest_rate_mode": interest_rate_mode,
+            "borrow_rate": borrow_rate,
+        }
+
+    def _extract_repay_data(self) -> dict[str, int | bool]:
+        """Extract data from REPAY event."""
+        # REPAY: data=(uint256 amount, bool useATokens)
+        raw_amount, use_a_tokens = eth_abi.decode(
+            types=["uint256", "bool"],
+            data=self.operation.pool_event["data"],
+        )
+        return {
+            "raw_amount": raw_amount,
+            "use_a_tokens": use_a_tokens,
+        }
+
+    def _extract_liquidation_data(self) -> dict[str, int]:
+        """Extract data from LIQUIDATION_CALL event."""
+        # LIQUIDATION_CALL: data=(uint256 debtToCover, uint256 liquidatedCollateralAmount,
+        #                          address liquidator, bool receiveAToken)
+        debt_to_cover, liquidated_collateral, liquidator, receive_a_token = eth_abi.decode(
+            types=["uint256", "uint256", "address", "bool"],
+            data=self.operation.pool_event["data"],
+        )
+        return {
+            "debt_to_cover": debt_to_cover,
+            "liquidated_collateral": liquidated_collateral,
+            "liquidator": liquidator,
+            "receive_a_token": receive_a_token,
+        }
+
+    def _extract_deficit_data(self) -> dict[str, int]:
+        """Extract data from DEFICIT_CREATED event."""
+        # DEFICIT_CREATED: data=(uint256 amountCreated)
+        amount_created = eth_abi.decode(
+            types=["uint256"],
+            data=self.operation.pool_event["data"],
+        )[0]
+        return {
+            "amount_created": amount_created,
+        }

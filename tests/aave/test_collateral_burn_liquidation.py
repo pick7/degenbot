@@ -12,6 +12,7 @@ import eth_abi
 from eth_typing import ChecksumAddress
 from hexbytes import HexBytes
 
+from degenbot.aave.processors import PoolProcessorFactory
 from degenbot.functions import get_checksum_address
 
 
@@ -43,10 +44,6 @@ class TestCollateralBurnLiquidationMatching:
         - debtToCover: ~0.0118 WETH
         - liquidatedCollateralAmount: 226,483 units (of aEthcbBTC)
         """
-        # LIQUIDATION_CALL topic
-        liquidation_topic = HexBytes(
-            "0xe413a413e37f7bf964d3b40070d324c55a04c3c3c28b49d152f521e0a26f49ad"
-        )
 
         user_address = "0xaca98ec16bf9174c6acb486870bab8616d1e5a3b"
         collateral_asset = "0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf"  # cbBTC
@@ -54,9 +51,9 @@ class TestCollateralBurnLiquidationMatching:
 
         # Simulated event data from actual transaction
         # debtToCover = 11826010208460853 (0.011826... WETH)
-        # liquidatedCollateralAmount = 226483
-        # liquidator = 0x9d6b911199b891c55a93e4bc635bf59e33d002d8
-        # receiveAToken = False
+        # liquidatedCollateralAmount = 226483 # noqa:ERA001
+        # liquidator = 0x9d6b911199b891c55a93e4bc635bf59e33d002d8 # noqa:ERA001
+        # receiveAToken = False # noqa:ERA001
         event_data = eth_abi.abi.encode(
             types=["uint256", "uint256", "address", "bool"],
             args=[11826010208460853, 226483, "0x9d6b911199b891c55a93e4bc635bf59e33d002d8", False],
@@ -142,7 +139,7 @@ class TestCollateralBurnLiquidationMatching:
         }
 
         # Decode Burn event
-        burn_value, burn_balance_increase, burn_index = eth_abi.abi.decode(
+        burn_value, _burn_balance_increase, _burn_index = eth_abi.abi.decode(
             types=["uint256", "uint256", "uint256"],
             data=burn_event["data"],
         )
@@ -150,10 +147,10 @@ class TestCollateralBurnLiquidationMatching:
 
         # Decode LIQUIDATION_CALL event
         (
-            liquidation_debt_to_cover,
+            _liquidation_debt_to_cover,
             liquidation_collateral_amount,
-            liquidation_liquidator,
-            liquidation_receive_a_token,
+            _liquidation_liquidator,
+            _liquidation_receive_a_token,
         ) = eth_abi.abi.decode(
             types=["uint256", "uint256", "address", "bool"],
             data=liquidation_event["data"],
@@ -202,13 +199,12 @@ class TestCollateralBurnLiquidationMatching:
 
         scaled_amount = ray_div(liquidatedCollateralAmount, liquidityIndex)
         """
-        from degenbot.aave.processors import PoolProcessorFactory
 
         # Get pool processor for V1 (used by aEthcbBTC)
         pool_processor = PoolProcessorFactory.get_pool_processor_for_token_revision(1)
 
         # From actual transaction:
-        # liquidatedCollateralAmount = 226483
+        # liquidatedCollateralAmount = 226483 # noqa:ERA001
         # liquidityIndex = 1062524787910956572223166138 (at block 21893775)
         liquidated_collateral_amount = 226483
         liquidity_index = 1062524787910956572223166138

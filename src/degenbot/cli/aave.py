@@ -31,7 +31,12 @@ from degenbot.checksum_cache import get_checksum_address
 from degenbot.cli import cli
 from degenbot.cli.aave_event_matching import (
     EventMatcher,
+    OperationAwareEventMatcher,
     ScaledTokenEventType,
+)
+from degenbot.cli.aave_transaction_operations import (
+    TransactionOperationsParser,
+    TransactionValidationError,
 )
 from degenbot.cli.utils import get_web3_from_config
 from degenbot.constants import ERC_1967_IMPLEMENTATION_SLOT, ZERO_ADDRESS
@@ -56,6 +61,12 @@ from degenbot.logging import logger
 
 if TYPE_CHECKING:
     from eth_typing.evm import BlockParams
+
+    from degenbot.cli.aave_transaction_operations import (
+        EventMatchResult,
+        Operation,
+        ScaledTokenEvent,
+    )
 
 
 class TokenType(Enum):
@@ -84,6 +95,44 @@ class UserOperation(Enum):
 
 
 GHO_VARIABLE_DEBT_TOKEN_ADDRESS = get_checksum_address("0x786dBff3f1292ae8F92ea68Cf93c30b34B1ed04B")
+
+
+# Feature flag for operation-based event processing
+# Set to True to enable the new operation-aware processing
+USE_OPERATION_BASED_PROCESSING: bool = os.environ.get(
+    "DEGENBOT_USE_OPERATIONS", "false"
+).lower() in {"1", "true", "yes"}
+
+"""
+MIGRATION: Operation-Based Event Processing
+
+We are migrating from individual event processing to operation-based processing.
+This provides:
+- Better handling of complex transactions (liquidations, multi-operations)
+- Strict validation with detailed error reporting
+- Pattern-aware event matching without max_log_index constraints
+
+Phase 1: Feature flag added (USE_OPERATION_BASED_PROCESSING) - COMPLETE
+  - Set via DEGENBOT_USE_OPERATIONS env var
+  - Defaults to False (legacy processing)
+
+Phase 2: _process_transaction_with_operations() implemented - COMPLETE
+  - Parses events into logical operations before processing
+  - Validates all operations upfront
+  - Uses OperationAwareEventMatcher for pattern-aware matching
+
+Phase 3: Migrate individual event processors (IN PROGRESS)
+  - Each event processor needs to support operation-based context
+  - Gradual migration of _process_collateral_mint_event, etc.
+
+Phase 4: Remove legacy code
+  - Once all processors migrated and tested
+  - Remove USE_OPERATION_BASED_PROCESSING flag
+  - Remove legacy event-by-event processing
+
+See: src/degenbot/cli/aave_transaction_operations.py
+See: tests/cli/test_aave_transaction_operations.py
+"""
 
 
 @dataclass
@@ -2135,7 +2184,18 @@ def _process_transaction_with_context(
                     # Function may not exist (revision 4+), default to 0
                     tx_context.user_discounts[user_address] = 0
 
-    # Process all events in chronological order
+    # Use operation-based processing if enabled
+    if USE_OPERATION_BASED_PROCESSING:
+        _process_transaction_with_operations(
+            tx_context=tx_context,
+            market=market,
+            session=session,
+            w3=w3,
+            gho_asset=gho_asset,
+        )
+        return
+
+    # Process all events in chronological order (legacy path)
     for event in tx_context.events:
         topic = event["topics"][0]
         event_address = get_checksum_address(event["address"])
@@ -2173,6 +2233,170 @@ def _process_transaction_with_context(
             _process_discount_rate_strategy_updated_event(context)
         elif topic == AaveV3Event.DISCOUNT_TOKEN_UPDATED.value:
             _process_discount_token_updated_event(context)
+
+
+def _process_transaction_with_operations(
+    *,
+    tx_context: TransactionContext,
+    market: AaveV3MarketTable,
+    session: Session,
+    w3: Web3,
+    gho_asset: AaveGhoTokenTable,
+) -> None:
+    """Process transaction using operation-based parsing.
+
+    This is the new operation-aware event processing flow that parses
+    events into logical operations before processing. It provides:
+    - Strict validation with detailed error reporting
+    - Pattern-aware event matching
+    - Better handling of complex transactions (liquidations, repay with aTokens)
+
+    This function will eventually replace _process_transaction_with_context.
+    """
+    # Build token type mapping for proper event classification
+    token_type_mapping: dict[ChecksumAddress, str] = {}
+    for asset in market.assets:
+        if asset.a_token:
+            token_type_mapping[get_checksum_address(asset.a_token.address)] = "aToken"
+        if asset.v_token:
+            token_type_mapping[get_checksum_address(asset.v_token.address)] = "vToken"
+
+    # Parse events into operations
+    parser = TransactionOperationsParser(
+        token_type_mapping=token_type_mapping,
+    )
+    tx_operations = parser.parse(
+        events=tx_context.events,
+        tx_hash=tx_context.tx_hash,
+    )
+
+    # Strict validation - fail immediately on any issue
+    try:
+        tx_operations.validate(tx_context.events)
+    except TransactionValidationError as e:
+        logger.error(f"Transaction validation failed: {e}")
+        raise
+
+    # Process each operation
+    for operation in tx_operations.operations:
+        _process_operation(
+            operation=operation,
+            tx_context=tx_context,
+            market=market,
+            session=session,
+            w3=w3,
+            gho_asset=gho_asset,
+        )
+
+
+def _process_operation(
+    *,
+    operation: "Operation",
+    tx_context: TransactionContext,
+    market: AaveV3MarketTable,
+    session: Session,
+    w3: Web3,
+    gho_asset: AaveGhoTokenTable,
+) -> None:
+    """Process a single operation.
+
+    Args:
+        operation: The operation to process
+        tx_context: Transaction context
+        market: Aave market
+        session: Database session
+        w3: Web3 instance
+        gho_asset: GHO asset configuration
+    """
+
+    # Create matcher for this operation
+    matcher = OperationAwareEventMatcher(operation)
+
+    # Process each scaled token event in the operation
+    for scaled_event in operation.scaled_token_events:
+        # Find match within operation context
+        match_result = matcher.find_match(scaled_event)
+
+        if match_result is None:
+            msg = f"No match for {scaled_event.event_type} in operation {operation.operation_id}"
+            raise ValueError(msg)
+
+        # Create handler context
+        context = EventHandlerContext(
+            w3=w3,
+            event=scaled_event.event,
+            market=market,
+            session=session,
+            gho_asset=gho_asset,
+            contract_address=get_checksum_address(scaled_event.event["address"]),
+            tx_context=tx_context,
+        )
+
+        # Route to appropriate handler based on event type
+        if scaled_event.event_type == "COLLATERAL_MINT":
+            _process_collateral_mint_with_match(
+                context=context,
+                scaled_event=scaled_event,
+                match_result=match_result,
+            )
+        elif scaled_event.event_type == "COLLATERAL_BURN":
+            _process_collateral_burn_with_match(
+                context=context,
+                scaled_event=scaled_event,
+                match_result=match_result,
+            )
+        elif scaled_event.event_type in {"DEBT_MINT", "GHO_DEBT_MINT"}:
+            _process_debt_mint_with_match(
+                context=context,
+                scaled_event=scaled_event,
+                match_result=match_result,
+            )
+        elif scaled_event.event_type in {"DEBT_BURN", "GHO_DEBT_BURN"}:
+            _process_debt_burn_with_match(
+                context=context,
+                scaled_event=scaled_event,
+                match_result=match_result,
+            )
+
+        # Mark pool event as consumed if needed
+        if match_result["should_consume"]:
+            tx_context.matched_pool_events[match_result["pool_event"]["logIndex"]] = True
+
+
+def _process_collateral_mint_with_match(
+    context: EventHandlerContext,
+    scaled_event: "ScaledTokenEvent",
+    match_result: "EventMatchResult",
+) -> None:
+    """Process collateral mint with operation match."""
+    # Implementation will be added
+
+
+def _process_collateral_burn_with_match(
+    context: EventHandlerContext,
+    scaled_event: "ScaledTokenEvent",
+    match_result: "EventMatchResult",
+) -> None:
+    """Process collateral burn with operation match."""
+    # Implementation will be added
+
+
+def _process_debt_mint_with_match(
+    context: EventHandlerContext,
+    scaled_event: "ScaledTokenEvent",
+    match_result: "EventMatchResult",
+) -> None:
+    """Process debt mint with operation match."""
+    # Implementation will be added
+
+
+def _process_debt_burn_with_match(
+    context: EventHandlerContext,
+    scaled_event: "ScaledTokenEvent",
+    match_result: "EventMatchResult",
+) -> None:
+    """Process debt burn with operation match."""
+    # Implementation will be added
 
 
 def _process_staked_aave_event(
