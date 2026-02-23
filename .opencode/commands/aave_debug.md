@@ -50,3 +50,6 @@ Create a new report in @debug/aave. Follow this format:
 ### 6. Improve
 - Review opportunities to refactor and clean up code that contributed to this failure
 - Use the investigation report and transaction details to write a stateless unit test to verify that the math operations, user operation determination, event matching logic, etc., match the expectations.
+
+### 7. Clean Up
+- Remove unneeded files in @.opencode/tmp
