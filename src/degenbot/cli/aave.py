@@ -4900,11 +4900,6 @@ def update_aave_market(
             )
         )
 
-    # Extract all user addresses involved in events for targeted verification
-    users_in_chunk: set[ChecksumAddress] = set()
-    for event in all_events:
-        users_in_chunk.update(_extract_user_addresses_from_event(event))
-
     # Group the events into transaction bundles with a shared context
     tx_contexts = _build_transaction_contexts(
         events=all_events,
@@ -4915,75 +4910,136 @@ def update_aave_market(
         known_scaled_token_addresses=known_scaled_token_addresses,
     )
 
-    processed_txs: set[HexBytes] = set()
+    # Group events by block for verification at block boundaries
+    events_by_block: dict[int, list[LogReceipt]] = {}
+    users_by_block: dict[int, set[ChecksumAddress]] = {}
+    for event in all_events:
+        block_number = event["blockNumber"]
+        if block_number not in events_by_block:
+            events_by_block[block_number] = []
+            users_by_block[block_number] = set()
+        events_by_block[block_number].append(event)
+        users_by_block[block_number].update(_extract_user_addresses_from_event(event))
 
-    # Process all events within transaction context to ensure correct ordering
-    # and atomic state updates
-    for event in tqdm.tqdm(
-        sorted(all_events, key=_event_sort_key),
-        desc="Processing events",
+    processed_txs: set[HexBytes] = set()
+    last_verified_block: int | None = None
+
+    # Process events block by block, verifying before processing each new block
+    sorted_blocks = sorted(events_by_block.keys())
+    for current_block in tqdm.tqdm(
+        sorted_blocks,
+        desc="Processing blocks",
         leave=False,
         disable=no_progress,
     ):
-        tx_hash = event["transactionHash"]
+        # Verify users from the previous block before processing this block's events
+        # Verification is performed against the block prior to the current block
+        if verify and last_verified_block is not None:
+            users_to_verify = users_by_block.get(last_verified_block, set())
+            if users_to_verify:
+                session.flush()
+                _verify_scaled_token_positions(
+                    w3=w3,
+                    market=market,
+                    session=session,
+                    position_table=AaveV3CollateralPositionsTable,
+                    block_number=last_verified_block,
+                    no_progress=no_progress,
+                    user_addresses=users_to_verify,
+                )
+                _verify_scaled_token_positions(
+                    w3=w3,
+                    market=market,
+                    session=session,
+                    position_table=AaveV3DebtPositionsTable,
+                    block_number=last_verified_block,
+                    no_progress=no_progress,
+                    user_addresses=users_to_verify,
+                )
+                _verify_stk_aave_balances(
+                    w3=w3,
+                    session=session,
+                    market=market,
+                    gho_asset=gho_asset,
+                    block_number=last_verified_block,
+                    no_progress=no_progress,
+                    user_addresses=users_to_verify,
+                )
+                _verify_gho_discount_amounts(
+                    w3=w3,
+                    session=session,
+                    market=market,
+                    gho_asset=gho_asset,
+                    block_number=last_verified_block,
+                    no_progress=no_progress,
+                    user_addresses=users_to_verify,
+                )
 
-        # Skip if this transaction was already processed
-        if tx_hash in processed_txs:
-            continue
+        # Process all events in the current block
+        for event in sorted(events_by_block[current_block], key=_event_sort_key):
+            tx_hash = event["transactionHash"]
 
-        global event_in_process  # noqa: PLW0603
-        event_in_process = event
+            # Skip if this transaction was already processed
+            if tx_hash in processed_txs:
+                continue
 
-        # Process entire transaction atomically with full context
-        tx_context = tx_contexts[tx_hash]
-        _process_transaction_with_context(
-            tx_context=tx_context,
-            market=market,
-            session=session,
-            w3=w3,
-            gho_asset=gho_asset,
-        )
-        processed_txs.add(tx_hash)
+            global event_in_process  # noqa: PLW0603
+            event_in_process = event
 
-    # Perform verification at chunk boundary for users involved in this chunk
-    if verify:
-        session.flush()
-        _verify_scaled_token_positions(
-            w3=w3,
-            market=market,
-            session=session,
-            position_table=AaveV3CollateralPositionsTable,
-            block_number=end_block,
-            no_progress=no_progress,
-            user_addresses=users_in_chunk,
-        )
-        _verify_scaled_token_positions(
-            w3=w3,
-            market=market,
-            session=session,
-            position_table=AaveV3DebtPositionsTable,
-            block_number=end_block,
-            no_progress=no_progress,
-            user_addresses=users_in_chunk,
-        )
-        _verify_stk_aave_balances(
-            w3=w3,
-            session=session,
-            market=market,
-            gho_asset=gho_asset,
-            block_number=end_block,
-            no_progress=no_progress,
-            user_addresses=users_in_chunk,
-        )
-        _verify_gho_discount_amounts(
-            w3=w3,
-            session=session,
-            market=market,
-            gho_asset=gho_asset,
-            block_number=end_block,
-            no_progress=no_progress,
-            user_addresses=users_in_chunk,
-        )
+            # Process entire transaction atomically with full context
+            tx_context = tx_contexts[tx_hash]
+            _process_transaction_with_context(
+                tx_context=tx_context,
+                market=market,
+                session=session,
+                w3=w3,
+                gho_asset=gho_asset,
+            )
+            processed_txs.add(tx_hash)
+
+        last_verified_block = current_block
+
+    # Perform final verification at chunk boundary for the last block
+    if verify and last_verified_block is not None:
+        users_to_verify = users_by_block.get(last_verified_block, set())
+        if users_to_verify:
+            session.flush()
+            _verify_scaled_token_positions(
+                w3=w3,
+                market=market,
+                session=session,
+                position_table=AaveV3CollateralPositionsTable,
+                block_number=last_verified_block,
+                no_progress=no_progress,
+                user_addresses=users_to_verify,
+            )
+            _verify_scaled_token_positions(
+                w3=w3,
+                market=market,
+                session=session,
+                position_table=AaveV3DebtPositionsTable,
+                block_number=last_verified_block,
+                no_progress=no_progress,
+                user_addresses=users_to_verify,
+            )
+            _verify_stk_aave_balances(
+                w3=w3,
+                session=session,
+                market=market,
+                gho_asset=gho_asset,
+                block_number=last_verified_block,
+                no_progress=no_progress,
+                user_addresses=users_to_verify,
+            )
+            _verify_gho_discount_amounts(
+                w3=w3,
+                session=session,
+                market=market,
+                gho_asset=gho_asset,
+                block_number=last_verified_block,
+                no_progress=no_progress,
+                user_addresses=users_to_verify,
+            )
 
     _cleanup_zero_balance_positions(
         session=session,
