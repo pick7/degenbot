@@ -32,6 +32,7 @@ from degenbot.aave.processors import (
 from degenbot.checksum_cache import get_checksum_address
 from degenbot.cli import cli
 from degenbot.cli.aave_debug_logger import aave_debug_logger
+from degenbot.cli.aave_event_matching import AaveV3Event as EventMatcherAaveV3Event
 from degenbot.cli.aave_event_matching import (
     EventMatcher,
     OperationAwareEventMatcher,
@@ -3900,12 +3901,10 @@ def _process_collateral_mint_event(
 
     # DEBUG: Log entry into collateral mint handler
     logger.debug(
-        f"[BUG42-DEBUG] _process_collateral_mint_event called: "
+        f"_process_collateral_mint_event called: "
         f"user={user.address}, token={token_address}, reserve={reserve_address}, "
         f"event_amount={event_amount}, balance_increase={balance_increase}, "
-        f"caller={caller_address}, logIndex={event['logIndex']}",
-        file=sys.stderr,
-        flush=True,
+        f"caller={caller_address}, logIndex={event['logIndex']}"
     )
 
     # Track matched pool event and calculated scaled delta
@@ -3933,8 +3932,7 @@ def _process_collateral_mint_event(
         matcher = EventMatcher(tx_context)
 
         # Determine which event type to try first based on value vs balance_increase
-        # Use >= to handle the edge case where deposit amount equals accrued interest
-        if event_amount >= balance_increase:
+        if event_amount > balance_increase:
             # Standard deposit - SUPPLY is most likely
             # Try: SUPPLY -> WITHDRAW -> LIQUIDATION_CALL (per MatchConfig order)
             # Note: SUPPLY events come AFTER Mint events in transaction logs, so we
@@ -3947,29 +3945,56 @@ def _process_collateral_mint_event(
                 check_users=[caller_address],
                 # No max_log_index - SUPPLY comes AFTER Mint event
             )
+        elif balance_increase > event_amount:
+            # balance_increase > value - interest accrual during repayment/debt burn
+            # Try REPAY first since this is likely a repayment operation
+            result = matcher.find_matching_pool_event(
+                event_type=ScaledTokenEventType.COLLATERAL_MINT,
+                user_address=caller_address,  # Try caller first for repay
+                reserve_address=reserve_address,
+                check_users=[user.address],
+            )
         else:
-            # balance_increase > value - interest accrual during withdraw
-            # Try WITHDRAW first since this is likely a withdrawal operation
+            # event_amount == balance_increase - pure interest accrual
+            # This typically happens during withdrawals (not deposits)
+            # Try WITHDRAW first to avoid incorrectly matching SUPPLY events
+            # that belong to other mints in the same transaction.
+            # See debug/aave/0044 for swapAndRepay example.
             result = matcher.find_matching_pool_event(
                 event_type=ScaledTokenEventType.COLLATERAL_MINT,
                 user_address=caller_address,  # Try caller first for withdraw
                 reserve_address=reserve_address,
                 check_users=[user.address],
+                try_event_type_first=EventMatcherAaveV3Event.WITHDRAW,  # Try WITHDRAW before SUPPLY
             )
 
         if result is not None:
             matched_pool_event = result["pool_event"]
             extraction_data = result["extraction_data"]
         elif event_amount > balance_increase:
-            # No matching Pool event found for a deposit - this is an error
-            # The caller catches ValueError and tries debt processing if available
-            available = [e["topics"][0].hex()[:10] for e in tx_context.pool_events]
-            msg = (
-                f"No matching Pool event for collateral mint in tx {tx_context.tx_hash.hex()}. "
-                f"User: {user.address}, Reserve: {reserve_address}. "
-                f"Available: {available}"
+            # No matching Pool event found with user.address as primary.
+            # Try with caller_address as primary user (handles swapAndRepay where
+            # the caller contract performs the withdrawal but mints for the user).
+            # See debug/aave/0044
+            result = matcher.find_matching_pool_event(
+                event_type=ScaledTokenEventType.COLLATERAL_MINT,
+                user_address=caller_address,
+                reserve_address=reserve_address,
+                check_users=[user.address],
             )
-            raise ValueError(msg)
+            if result is not None:
+                matched_pool_event = result["pool_event"]
+                extraction_data = result["extraction_data"]
+            else:
+                # No matching Pool event found for a deposit - this is an error
+                # The caller catches ValueError and tries debt processing if available
+                available = [e["topics"][0].hex()[:10] for e in tx_context.pool_events]
+                msg = (
+                    f"No matching Pool event for collateral mint in tx {tx_context.tx_hash.hex()}. "
+                    f"User: {user.address}, Reserve: {reserve_address}. "
+                    f"Available: {available}"
+                )
+                raise ValueError(msg)
         # If event_amount <= balance_increase and no match found, proceed with
         # scaled_amount=None. This handles edge cases like value == balance_increase
         # deposits via routers. See debug/aave/0019
@@ -4255,12 +4280,10 @@ def _process_standard_debt_mint_event(
 
     # DEBUG: Log entry into debt mint handler
     logger.debug(
-        f"[BUG42-DEBUG] _process_standard_debt_mint_event called: "
+        f"_process_standard_debt_mint_event called: "
         f"user={user.address}, token={token_address}, reserve={reserve_address}, "
         f"event_amount={event_amount}, balance_increase={balance_increase}, "
-        f"logIndex={event['logIndex']}",
-        file=sys.stderr,
-        flush=True,
+        f"logIndex={event['logIndex']}"
     )
 
     # Skip verification for pure interest accrual (value == balanceIncrease)
@@ -4282,12 +4305,12 @@ def _process_standard_debt_mint_event(
         if result is not None:
             matched_topic = result["pool_event"]["topics"][0].hex()[:10]
             logger.debug(
-                f"[BUG42-DEBUG] EventMatcher returned result: "
+                f"EventMatcher returned result: "
                 f"matched_topic={matched_topic}, should_consume={result['should_consume']}, "
                 f"extraction_data={result['extraction_data']}"
             )
         else:
-            logger.debug(f"[BUG42-DEBUG] EventMatcher returned None - no matching pool event found")
+            logger.debug("EventMatcher returned None - no matching pool event found")
 
         # For BORROW operations, calculate scaled_amount from the borrow amount
         # This matches the Pool's calculation: amount.getVTokenMintScaledAmount(index)
@@ -4303,13 +4326,13 @@ def _process_standard_debt_mint_event(
                 borrow_index=index,
             )
             logger.debug(
-                f"[BUG42-DEBUG] Calculated scaled_amount for BORROW: "
+                f"Calculated scaled_amount for BORROW: "
                 f"borrow_amount={borrow_amount}, scaled_amount={scaled_amount}, "
                 f"index={index}"
             )
     else:
         logger.debug(
-            f"[BUG42-DEBUG] Skipping EventMatcher - pure interest accrual "
+            f"Skipping EventMatcher - pure interest accrual "
             f"(event_amount={event_amount} == balance_increase={balance_increase})"
         )
 
@@ -4333,7 +4356,7 @@ def _process_standard_debt_mint_event(
     # DEBUG: Log the balance change
     balance_delta = debt_position.balance - user_starting_amount
     logger.debug(
-        f"[BUG42-DEBUG] Debt mint processed: "
+        f"Debt mint processed: "
         f"user={user.address}, token={token_address}, "
         f"starting_balance={user_starting_amount}, ending_balance={debt_position.balance}, "
         f"delta={balance_delta}, scaled_amount_used={scaled_amount}"
