@@ -65,9 +65,28 @@ The assumption that Pool events always precede their corresponding Token events 
 
 ## Refactoring
 
-Consider reviewing other event types that use `max_log_index` constraints:
-- `COLLATERAL_MINT` - May have similar issues if SUPPLY events appear after Mint events
-- `DEBT_BURN` - Currently uses `max_log_index`, may need similar treatment
-- `COLLATERAL_BURN` - Currently uses `max_log_index`, may need similar treatment
+The `max_log_index` parameter has been completely removed from the codebase:
 
-The consumption tracking in EventMatcher (`_is_consumed`, `_mark_consumed`) already prevents double-matching, making the `max_log_index` constraint redundant for correctness and potentially harmful for complex transactions.
+**Files Modified:**
+1. **src/degenbot/cli/aave_event_matching.py**
+   - Removed `max_log_index` parameter from `find_matching_pool_event()` signature
+   - Removed filtering logic that skipped events based on log index
+   - Updated docstring to explain event matching without temporal constraints
+
+2. **src/degenbot/cli/aave.py**
+   - Removed `max_log_index` from all 6 call sites:
+     - `_process_collateral_mint_event` (withdrawal branch)
+     - `_process_gho_debt_mint_event`
+     - `_process_standard_debt_mint_event`
+     - `_process_collateral_burn_event`
+     - `_process_gho_debt_burn_event`
+     - `_process_standard_debt_burn_event`
+
+3. **tests/cli/test_aave_event_matching.py**
+   - Removed `max_log_index` parameter from test calls
+
+4. **tests/cli/test_aave_supply_zero_address_matching.py**
+   - Removed `max_log_index` parameter from test calls
+
+**Rationale:**
+The consumption tracking mechanism (`_is_consumed`, `_mark_consumed`) already prevents events from being matched multiple times, making the `max_log_index` constraint redundant. The constraint was causing bugs in complex transactions where event ordering wasn't strictly sequential. Removing it simplifies the code and allows proper matching regardless of event ordering within a transaction.
