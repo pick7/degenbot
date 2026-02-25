@@ -12,8 +12,8 @@ Inspect the transaction on the chain's block explorer and on Tenderly (`https://
 If more information is needed, use the `cast` skill.
 
 Prepare an investigation report with detailed information about the transaction, including but not limited to:
-**Events**: Event logs, chronologically ordered by index, decoded in a human-readable format with event name, log index, topics, and values
-**Addresses**: All accounts and contracts involved with the transaction
-**Asset Flow**: An accounting of all asset flow between addresses
+- **Events**: Event logs, chronologically ordered by index, decoded in a human-readable format with event name, log index, topics, and values
+- **Addresses**: All accounts and contracts involved with the transaction
+- **Asset Flow**: An accounting of all asset flow between addresses
 
 Save the report, transaction details, and investigation notes to @.opencode/tmp/
