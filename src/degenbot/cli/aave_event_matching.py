@@ -479,7 +479,6 @@ class EventMatcher:
         reserve_address: ChecksumAddress,
         *,
         check_users: list[ChecksumAddress] | None = None,
-        max_log_index: int | None = None,
     ) -> EventMatchResult | None:
         """Find a matching pool event for a scaled token event.
 
@@ -487,14 +486,15 @@ class EventMatcher:
         available pool events in the transaction context, trying each configured
         event type in order until a match is found.
 
+        Matching is not constrained by event ordering (logIndex). Pool events can
+        appear before or after their corresponding token events in complex transactions.
+        Event consumption tracking prevents double-matching.
+
         Args:
             event_type: Type of scaled token event being matched
             user_address: Primary user address to match
             reserve_address: Reserve/token address to match
             check_users: Optional additional user addresses to try (e.g., caller_address)
-            max_log_index: Optional maximum logIndex for pool events. Pool events with
-                logIndex > max_log_index will be skipped. This prevents matching a
-                scaled token event to a pool event that occurs later in the transaction.
 
         Returns:
             EventMatchResult with pool_event, should_consume flag, and extraction_data,
@@ -514,8 +514,7 @@ class EventMatcher:
         # DEBUG: Log entry into event matching
         logger.debug(
             f"[BUG42-DEBUG] EventMatcher.find_matching_pool_event called: "
-            f"event_type={event_type.name}, user={user_address}, reserve={reserve_address}, "
-            f"max_log_index={max_log_index}"
+            f"event_type={event_type.name}, user={user_address}, reserve={reserve_address}"
         )
 
         # Build list of user addresses to check
@@ -542,14 +541,6 @@ class EventMatcher:
                 for pool_event in events_of_type:
                     event_log_index = pool_event["logIndex"]
                     event_topic = pool_event["topics"][0].hex()[:10]
-
-                    # Skip events that occur after the scaled token event
-                    if max_log_index is not None and event_log_index > max_log_index:
-                        logger.debug(
-                            f"[BUG42-DEBUG] Skipping event at logIndex {event_log_index} "
-                            f"(topic={event_topic}) - after max_log_index {max_log_index}"
-                        )
-                        continue
 
                     if self._is_consumed(pool_event):
                         logger.debug(

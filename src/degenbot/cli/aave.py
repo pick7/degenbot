@@ -3950,13 +3950,11 @@ def _process_collateral_mint_event(
         else:
             # balance_increase > value - interest accrual during withdraw
             # Try WITHDRAW first since this is likely a withdrawal operation
-            # WITHDRAW events come BEFORE Burn events, so restrict by max_log_index
             result = matcher.find_matching_pool_event(
                 event_type=ScaledTokenEventType.COLLATERAL_MINT,
                 user_address=caller_address,  # Try caller first for withdraw
                 reserve_address=reserve_address,
                 check_users=[user.address],
-                max_log_index=event["logIndex"],
             )
 
         if result is not None:
@@ -4080,7 +4078,6 @@ def _process_gho_debt_mint_event(
             user_address=user.address,
             reserve_address=reserve_address,
             check_users=[caller_address],  # For adapter pattern (onBehalfOf=adapter)
-            max_log_index=context.event["logIndex"],
         )
 
         # For BORROW operations, calculate scaled_amount from the borrow amount
@@ -4279,9 +4276,6 @@ def _process_standard_debt_mint_event(
             user_address=user.address,
             reserve_address=reserve_address,
             check_users=[caller_address],  # For adapter pattern (onBehalfOf=adapter)
-            # Don't restrict by max_log_index - BORROW events can appear after Mint events
-            # in complex transactions with multiple operations
-            max_log_index=None,
         )
 
         # DEBUG: Log matching result
@@ -4521,7 +4515,6 @@ def _process_collateral_burn_event(
         event_type=ScaledTokenEventType.COLLATERAL_BURN,
         user_address=user.address,
         reserve_address=reserve_address,
-        max_log_index=event["logIndex"],
     )
 
     # Extract scaled_amount based on matched pool event type
@@ -4627,7 +4620,6 @@ def _process_gho_debt_burn_event(
         event_type=ScaledTokenEventType.GHO_DEBT_BURN,
         user_address=user.address,
         reserve_address=reserve_address,
-        max_log_index=context.event["logIndex"],
     )
 
     if result is None:
@@ -4766,7 +4758,6 @@ def _process_standard_debt_burn_event(
         event_type=ScaledTokenEventType.DEBT_BURN,
         user_address=user.address,
         reserve_address=reserve_address,
-        max_log_index=event["logIndex"],
     )
 
     if result is None:

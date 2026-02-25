@@ -111,7 +111,6 @@ class TestWrappedTokenGatewaySupply:
             user_address=user_address,
             reserve_address=reserve_address,
             check_users=[gateway_address],
-            max_log_index=10,
         )
 
         assert result is not None, "Should find matching SUPPLY event"
@@ -151,7 +150,6 @@ class TestWrappedTokenGatewaySupply:
             event_type=ScaledTokenEventType.COLLATERAL_MINT,
             user_address=user_address,
             reserve_address=reserve_address,
-            max_log_index=10,
         )
 
         assert result is not None, "Should find matching SUPPLY event"
@@ -187,7 +185,6 @@ class TestWrappedTokenGatewaySupply:
             event_type=ScaledTokenEventType.COLLATERAL_MINT,
             user_address=user_address,
             reserve_address=reserve_address,
-            max_log_index=10,
         )
 
         assert result is not None
@@ -219,7 +216,6 @@ class TestWrappedTokenGatewaySupply:
             event_type=ScaledTokenEventType.COLLATERAL_MINT,
             user_address=wrong_user,
             reserve_address=reserve_address,
-            max_log_index=10,
         )
 
         assert result is None, "Should not match when user doesn't match"

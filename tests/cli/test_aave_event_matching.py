@@ -1556,7 +1556,6 @@ class TestDebtMintMaxLogIndex:
             event_type=ScaledTokenEventType.DEBT_MINT,
             user_address=user_address,
             reserve_address=wsteth_reserve,
-            max_log_index=None,  # Key fix: don't restrict by log index
         )
 
         assert result is not None, "Debt mint should match BORROW even with higher logIndex"
@@ -1587,7 +1586,6 @@ class TestDebtMintMaxLogIndex:
             event_type=ScaledTokenEventType.DEBT_MINT,
             user_address=user_address,
             reserve_address=wsteth_reserve,
-            max_log_index=None,
         )
 
         assert result is not None, "Debt mint should match BORROW event"
@@ -1627,7 +1625,6 @@ class TestDebtMintMaxLogIndex:
                 event_type=ScaledTokenEventType.DEBT_MINT,
                 user_address=user_address,
                 reserve_address=wsteth_reserve,
-                max_log_index=None,
             )
             assert result is not None, "Each debt mint should find a BORROW"
             matched_amounts.append(result["extraction_data"]["raw_amount"])
