@@ -172,10 +172,14 @@ class TestTransferBalanceTransferPairing:
 
         # Check that the events are the correct ones
         assert op.scaled_token_events[0].event["logIndex"] == 151
-        assert op.balance_transfer_events[0].event["logIndex"] == 152
+        assert op.balance_transfer_events[0]["logIndex"] == 152
 
         # The BalanceTransfer should have the higher amount (includes interest)
-        assert op.balance_transfer_events[0].amount == balance_transfer_amount
+        # Decode amount from the event data (first uint256 is amount, second is index)
+        decoded_amount, _ = eth_abi.abi.decode(
+            ["uint256", "uint256"], op.balance_transfer_events[0]["data"]
+        )
+        assert decoded_amount == balance_transfer_amount
         assert op.scaled_token_events[0].amount == transfer_amount
 
         # Validate - should pass without errors

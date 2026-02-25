@@ -15,7 +15,7 @@ Test Coverage:
 from typing import cast
 from unittest.mock import MagicMock
 
-import eth_abi
+import eth_abi.abi
 from eth_typing import ChecksumAddress
 from hexbytes import HexBytes
 from web3.types import LogReceipt
@@ -34,6 +34,11 @@ from degenbot.cli.aave_event_matching import (
     _should_consume_gho_debt_burn_pool_event,  # noqa: PLC2701
 )
 
+GHO_RESERVE_ADDRESS = get_checksum_address("0x40D16FC0246aD3160Ccc09B8D0D3A2cD28aE6C2f")
+USDC_RESERVE_ADDRESS = get_checksum_address("0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48")
+WETH_RESERVE_ADDRESS = get_checksum_address("0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2")
+WSTETH_RESERVE_ADDRESS = get_checksum_address("0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0")
+
 
 class TestEventConsumptionPolicies:
     """Test event consumption policy enforcement."""
@@ -47,10 +52,14 @@ class TestEventConsumptionPolicies:
             "topics": [AaveV3Event.LIQUIDATION_CALL.value],
             "logIndex": 100,
             "data": HexBytes(
-                "0x0000000000000000000000000000000000000000000000000000000000ad7dcb"  # debtToCover
-                "0000000000000000000000000000000000000000000000000000000000003a98"  # liquidatedCollateral
-                "000000000000000000000000e27bfd9d354e7e0f7c5ef2fea0cd9c3af3533a32"  # liquidator
-                "0000000000000000000000000000000000000000000000000000000000000000"  # receiveAToken
+                # debtToCover
+                "0x0000000000000000000000000000000000000000000000000000000000ad7dcb"
+                # liquidatedCollateral
+                "0000000000000000000000000000000000000000000000000000000000003a98"
+                # liquidator
+                "000000000000000000000000e27bfd9d354e7e0f7c5ef2fea0cd9c3af3533a32"
+                # receiveAToken
+                "0000000000000000000000000000000000000000000000000000000000000000"
             ),
         }
 
@@ -66,7 +75,8 @@ class TestEventConsumptionPolicies:
             "topics": [AaveV3Event.DEFICIT_CREATED.value],
             "logIndex": 105,
             "data": HexBytes(
-                "0x0000000000000000000000000000000000000000000000000000000000ad7dcb"  # amountCreated
+                # amountCreated
+                "0x0000000000000000000000000000000000000000000000000000000000ad7dcb"
             ),
         }
 
@@ -81,9 +91,15 @@ class TestEventConsumptionPolicies:
         pool_event = {
             "topics": [AaveV3Event.REPAY.value],
             "logIndex": 101,
-            "data": HexBytes(
-                "0x0000000000000000000000000000000000000000000000000000000000000000"  # amount
-                "0000000000000000000000000000000000000000000000000000000000000000"  # useATokens=False
+            "data": eth_abi.abi.encode(
+                types=[
+                    "uint256",
+                    "bool",
+                ],
+                args=[
+                    0,
+                    False,  # useATokens
+                ],
             ),
         }
 
@@ -189,21 +205,13 @@ class TestLiquidationCallConsumptionPattern:
         tx_context = self.create_mock_tx_context(cast("list[LogReceipt]", [liquidation_call_event]))
         matcher = EventMatcher(tx_context)
 
-        user_address = _decode_address(
-            HexBytes("0x000000000000000000000000225c63381cb487f64aa1fc37a59baa3228d6d4ef")
-        )
-        gho_reserve = _decode_address(
-            HexBytes("0x00000000000000000000000040d16fc0246ad3160ccc09b8d0d3a2cd28ae6c2f")
-        )
-        weth_reserve = _decode_address(
-            HexBytes("0x000000000000000000000000c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2")
-        )
+        user_address = get_checksum_address("0x225C63381cb487f64Aa1fc37A59baA3228d6d4ef")
 
         # First: GHO debt burn matches LIQUIDATION_CALL
         result1 = matcher.find_matching_pool_event(
             event_type=ScaledTokenEventType.GHO_DEBT_BURN,
             user_address=user_address,
-            reserve_address=gho_reserve,
+            reserve_address=GHO_RESERVE_ADDRESS,
         )
 
         assert result1 is not None, "GHO debt burn should match LIQUIDATION_CALL"
@@ -215,7 +223,7 @@ class TestLiquidationCallConsumptionPattern:
         result2 = matcher.find_matching_pool_event(
             event_type=ScaledTokenEventType.COLLATERAL_BURN,
             user_address=user_address,
-            reserve_address=weth_reserve,
+            reserve_address=WETH_RESERVE_ADDRESS,
         )
 
         assert result2 is not None, "WETH collateral burn should match same LIQUIDATION_CALL"
@@ -255,17 +263,13 @@ class TestLiquidationCallConsumptionPattern:
         tx_context = self.create_mock_tx_context(cast("list[LogReceipt]", [liquidation_call_event]))
         matcher = EventMatcher(tx_context)
 
-        liquidator = _decode_address(
-            HexBytes("0x0000000000000000000000008a643b83fe7c75c40f31d6b0d4d494a08fc08d48")
-        )
+        liquidator = get_checksum_address("0x8a643B83fE7C75c40f31d6b0d4D494a08FC08d48")
 
         # Debt mint matches LIQUIDATION_CALL
         result1 = matcher.find_matching_pool_event(
             event_type=ScaledTokenEventType.DEBT_MINT,
             user_address=liquidator,
-            reserve_address=_decode_address(
-                HexBytes("0x000000000000000000000000a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48")
-            ),
+            reserve_address=USDC_RESERVE_ADDRESS,
         )
 
         assert result1 is not None
@@ -275,9 +279,7 @@ class TestLiquidationCallConsumptionPattern:
         result2 = matcher.find_matching_pool_event(
             event_type=ScaledTokenEventType.COLLATERAL_MINT,
             user_address=liquidator,
-            reserve_address=_decode_address(
-                HexBytes("0x000000000000000000000000c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2")
-            ),
+            reserve_address=WETH_RESERVE_ADDRESS,
         )
 
         assert result2 is not None
@@ -323,18 +325,13 @@ class TestRepayWithATokensPattern:
         tx_context = self.create_mock_tx_context(cast("list[LogReceipt]", [repay_event]))
         matcher = EventMatcher(tx_context)
 
-        user_address = _decode_address(
-            HexBytes("0x0000000000000000000000004490db0fc0e8de7c7192f12f9c5e8409e7cadda2")
-        )
-        reserve_address = _decode_address(
-            HexBytes("0x000000000000000000000000a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48")
-        )
+        user_address = get_checksum_address("0x4490db0fc0e8de7c7192f12f9c5e8409e7cadda2")
 
         # Debt burn matches REPAY but does NOT consume it
         result1 = matcher.find_matching_pool_event(
             event_type=ScaledTokenEventType.DEBT_BURN,
             user_address=user_address,
-            reserve_address=reserve_address,
+            reserve_address=USDC_RESERVE_ADDRESS,
         )
 
         assert result1 is not None
@@ -348,7 +345,7 @@ class TestRepayWithATokensPattern:
         result2 = matcher.find_matching_pool_event(
             event_type=ScaledTokenEventType.COLLATERAL_BURN,
             user_address=user_address,
-            reserve_address=reserve_address,
+            reserve_address=USDC_RESERVE_ADDRESS,
         )
 
         assert result2 is not None
@@ -373,17 +370,12 @@ class TestRepayWithATokensPattern:
         tx_context = self.create_mock_tx_context(cast("list[LogReceipt]", [repay_event]))
         matcher = EventMatcher(tx_context)
 
-        user_address = _decode_address(
-            HexBytes("0x0000000000000000000000004490db0fc0e8de7c7192f12f9c5e8409e7cadda2")
-        )
-        reserve_address = _decode_address(
-            HexBytes("0x000000000000000000000000a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48")
-        )
+        user_address = get_checksum_address("0x4490db0fc0e8de7c7192f12f9c5e8409e7cadda2")
 
         result = matcher.find_matching_pool_event(
             event_type=ScaledTokenEventType.DEBT_BURN,
             user_address=user_address,
-            reserve_address=reserve_address,
+            reserve_address=USDC_RESERVE_ADDRESS,
         )
 
         assert result is not None
@@ -403,15 +395,20 @@ class TestEventMatchingOrder:
 
     def test_collateral_mint_tries_supply_first(self):
         """Collateral mint should try SUPPLY before WITHDRAW."""
+
+        reserve_address_encoded = eth_abi.abi.encode(
+            types=["address"], args=["0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"]
+        )
+
+        on_behalf_of_address_encoded = eth_abi.abi.encode(
+            types=["address"], args=["0x4490dB0FC0E8dE7c7192F12f9C5E8409E7caDda2"]
+        )
+
         supply_event = {
             "topics": [
                 AaveV3Event.SUPPLY.value,
-                HexBytes(
-                    "0x000000000000000000000000a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
-                ),  # reserve
-                HexBytes(
-                    "0x0000000000000000000000004490db0fc0e8de7c7192f12f9c5e8409e7cadda2"
-                ),  # onBehalfOf
+                reserve_address_encoded,
+                on_behalf_of_address_encoded,
             ],
             "logIndex": 100,
             "data": HexBytes(
@@ -423,8 +420,8 @@ class TestEventMatchingOrder:
         withdraw_event = {
             "topics": [
                 AaveV3Event.WITHDRAW.value,
-                HexBytes("0x000000000000000000000000a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"),
-                HexBytes("0x0000000000000000000000004490db0fc0e8de7c7192f12f9c5e8409e7cadda2"),
+                reserve_address_encoded,
+                on_behalf_of_address_encoded,
             ],
             "logIndex": 101,
             "data": HexBytes("0000000000000000000000000000000000000000000000000000000005f5e100"),
@@ -435,17 +432,12 @@ class TestEventMatchingOrder:
         )
         matcher = EventMatcher(tx_context)
 
-        user_address = _decode_address(
-            HexBytes("0x0000000000000000000000004490db0fc0e8de7c7192f12f9c5e8409e7cadda2")
-        )
-        reserve_address = _decode_address(
-            HexBytes("0x000000000000000000000000a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48")
-        )
+        user_address = get_checksum_address("0x4490db0fc0e8de7c7192f12f9c5e8409e7cadda2")
 
         result = matcher.find_matching_pool_event(
             event_type=ScaledTokenEventType.COLLATERAL_MINT,
             user_address=user_address,
-            reserve_address=reserve_address,
+            reserve_address=USDC_RESERVE_ADDRESS,
         )
 
         assert result is not None
@@ -481,17 +473,12 @@ class TestEventMatchingOrder:
         )
         matcher = EventMatcher(tx_context)
 
-        user_address = _decode_address(
-            HexBytes("0x0000000000000000000000004490db0fc0e8de7c7192f12f9c5e8409e7cadda2")
-        )
-        reserve_address = _decode_address(
-            HexBytes("0x000000000000000000000000a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48")
-        )
+        user_address = get_checksum_address("0x4490db0fc0e8de7c7192f12f9c5e8409e7cadda2")
 
         result = matcher.find_matching_pool_event(
             event_type=ScaledTokenEventType.COLLATERAL_BURN,
             user_address=user_address,
-            reserve_address=reserve_address,
+            reserve_address=USDC_RESERVE_ADDRESS,
         )
 
         assert result is not None
@@ -526,17 +513,12 @@ class TestEventDataExtraction:
         tx_context = self.create_mock_tx_context(cast("list[LogReceipt]", [supply_event]))
         matcher = EventMatcher(tx_context)
 
-        user_address = _decode_address(
-            HexBytes("0x0000000000000000000000004490db0fc0e8de7c7192f12f9c5e8409e7cadda2")
-        )
-        reserve_address = _decode_address(
-            HexBytes("0x000000000000000000000000a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48")
-        )
+        user_address = get_checksum_address("0x4490db0fc0e8de7c7192f12f9c5e8409e7cadda2")
 
         result = matcher.find_matching_pool_event(
             event_type=ScaledTokenEventType.COLLATERAL_MINT,
             user_address=user_address,
-            reserve_address=reserve_address,
+            reserve_address=USDC_RESERVE_ADDRESS,
         )
 
         assert result is not None
@@ -563,14 +545,11 @@ class TestEventDataExtraction:
         user_address = _decode_address(
             HexBytes("0x0000000000000000000000004490db0fc0e8de7c7192f12f9c5e8409e7cadda2")
         )
-        reserve_address = _decode_address(
-            HexBytes("0x000000000000000000000000a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48")
-        )
 
         result = matcher.find_matching_pool_event(
             event_type=ScaledTokenEventType.DEBT_BURN,
             user_address=user_address,
-            reserve_address=reserve_address,
+            reserve_address=USDC_RESERVE_ADDRESS,
         )
 
         assert result is not None
@@ -604,17 +583,12 @@ class TestEventDataExtraction:
         tx_context = self.create_mock_tx_context(cast("list[LogReceipt]", [liquidation_event]))
         matcher = EventMatcher(tx_context)
 
-        user_address = _decode_address(
-            HexBytes("0x000000000000000000000000225c63381cb487f64aa1fc37a59baa3228d6d4ef")
-        )
-        debt_reserve = _decode_address(
-            HexBytes("0x00000000000000000000000040d16fc0246ad3160ccc09b8d0d3a2cd28ae6c2f")
-        )
+        user_address = get_checksum_address("0x225C63381cb487f64Aa1fc37A59baA3228d6d4ef")
 
         result = matcher.find_matching_pool_event(
             event_type=ScaledTokenEventType.GHO_DEBT_BURN,
             user_address=user_address,
-            reserve_address=debt_reserve,
+            reserve_address=GHO_RESERVE_ADDRESS,
         )
 
         assert result is not None
@@ -627,20 +601,13 @@ class TestEventMatchError:
 
     def test_error_includes_context(self):
         """EventMatchError should include transaction context."""
-        user_address = _decode_address(
-            HexBytes("0x0000000000000000000000004490db0fc0e8de7c7192f12f9c5e8409e7cadda2")
-        )
-        reserve_address = _decode_address(
-            HexBytes("0x000000000000000000000000a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48")
-        )
-        assert user_address is not None
-        assert reserve_address is not None
+        user_address = get_checksum_address("0x4490db0fc0e8de7c7192f12f9c5e8409e7cadda2")
 
         error = EventMatchError(
             "No matching event found",
             tx_hash=HexBytes("0x1234"),
             user_address=user_address,
-            reserve_address=reserve_address,
+            reserve_address=USDC_RESERVE_ADDRESS,
             available_events=["0xe413a321", "0x2b6273e6"],
         )
 
@@ -710,12 +677,8 @@ class TestEdgeCases:
 
         result = matcher.find_matching_pool_event(
             event_type=ScaledTokenEventType.COLLATERAL_MINT,
-            user_address=_decode_address(
-                HexBytes("0x0000000000000000000000004490db0fc0e8de7c7192f12f9c5e8409e7cadda2")
-            ),
-            reserve_address=_decode_address(
-                HexBytes("0x000000000000000000000000a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48")
-            ),
+            user_address=get_checksum_address("0x4490db0fc0e8de7c7192f12f9c5e8409e7cadda2"),
+            reserve_address=USDC_RESERVE_ADDRESS,
         )
 
         assert result is None
@@ -742,7 +705,7 @@ class TestEdgeCases:
         result = matcher.find_matching_pool_event(
             event_type=ScaledTokenEventType.COLLATERAL_MINT,
             user_address=get_checksum_address("0x4490db0fc0e8de7c7192f12f9c5e8409e7cadda2"),
-            reserve_address=get_checksum_address("0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"),
+            reserve_address=USDC_RESERVE_ADDRESS,
         )
 
         assert result is None, "Should not match already consumed event"
@@ -770,13 +733,12 @@ class TestEdgeCases:
 
         user1 = get_checksum_address("0x1111111111111111111111111111111111111111")
         user2 = get_checksum_address("0x2222222222222222222222222222222222222222")
-        reserve = get_checksum_address("0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48")
 
         # Should not find with only user1
         result1 = matcher.find_matching_pool_event(
             event_type=ScaledTokenEventType.COLLATERAL_MINT,
             user_address=user1,
-            reserve_address=reserve,
+            reserve_address=USDC_RESERVE_ADDRESS,
         )
         assert result1 is None
 
@@ -784,7 +746,7 @@ class TestEdgeCases:
         result2 = matcher.find_matching_pool_event(
             event_type=ScaledTokenEventType.COLLATERAL_MINT,
             user_address=user1,
-            reserve_address=reserve,
+            reserve_address=USDC_RESERVE_ADDRESS,
             check_users=[user2],
         )
         assert result2 is not None
@@ -804,9 +766,6 @@ class TestDebtMintEventMatching:
         """Normal BORROW where onBehalfOf equals user.address."""
         user_address = _decode_address(
             HexBytes("0x0000000000000000000000001111111111111111111111111111111111111111")
-        )
-        reserve_address = _decode_address(
-            HexBytes("0x000000000000000000000000a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48")
         )
 
         borrow_event = {
@@ -834,7 +793,7 @@ class TestDebtMintEventMatching:
         result = matcher.find_matching_pool_event(
             event_type=ScaledTokenEventType.DEBT_MINT,
             user_address=user_address,
-            reserve_address=reserve_address,
+            reserve_address=USDC_RESERVE_ADDRESS,
         )
 
         assert result is not None
@@ -850,9 +809,6 @@ class TestDebtMintEventMatching:
         )
         adapter_address = _decode_address(
             HexBytes("0x0000000000000000000000002222222222222222222222222222222222222222")
-        )
-        reserve_address = _decode_address(
-            HexBytes("0x000000000000000000000000a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48")
         )
 
         # Borrow event has onBehalfOf=adapter (the caller), not user
@@ -880,7 +836,7 @@ class TestDebtMintEventMatching:
         result1 = matcher.find_matching_pool_event(
             event_type=ScaledTokenEventType.DEBT_MINT,
             user_address=user_address,
-            reserve_address=reserve_address,
+            reserve_address=USDC_RESERVE_ADDRESS,
         )
         assert result1 is None, "Should not match with user.address when onBehalfOf is adapter"
 
@@ -888,7 +844,7 @@ class TestDebtMintEventMatching:
         result2 = matcher.find_matching_pool_event(
             event_type=ScaledTokenEventType.DEBT_MINT,
             user_address=user_address,
-            reserve_address=reserve_address,
+            reserve_address=USDC_RESERVE_ADDRESS,
             check_users=[adapter_address],  # This enables adapter pattern
         )
 
@@ -900,9 +856,6 @@ class TestDebtMintEventMatching:
         """Liquidation where liquidator borrows - matches LIQUIDATION_CALL."""
         liquidator = _decode_address(
             HexBytes("0x0000000000000000000000001111111111111111111111111111111111111111")
-        )
-        debt_reserve = _decode_address(
-            HexBytes("0x00000000000000000000000040d16fc0246ad3160ccc09b8d0d3a2cd28ae6c2f")
         )
 
         liquidation_event = {
@@ -933,7 +886,7 @@ class TestDebtMintEventMatching:
         result = matcher.find_matching_pool_event(
             event_type=ScaledTokenEventType.DEBT_MINT,
             user_address=liquidator,
-            reserve_address=debt_reserve,
+            reserve_address=GHO_RESERVE_ADDRESS,
         )
 
         assert result is not None
@@ -946,9 +899,6 @@ class TestDebtMintEventMatching:
         """If both BORROW and REPAY available, BORROW should match first."""
         user_address = _decode_address(
             HexBytes("0x0000000000000000000000001111111111111111111111111111111111111111")
-        )
-        reserve_address = _decode_address(
-            HexBytes("0x000000000000000000000000a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48")
         )
 
         # Both events available - BORROW should be tried first
@@ -988,7 +938,7 @@ class TestDebtMintEventMatching:
         result = matcher.find_matching_pool_event(
             event_type=ScaledTokenEventType.DEBT_MINT,
             user_address=user_address,
-            reserve_address=reserve_address,
+            reserve_address=USDC_RESERVE_ADDRESS,
         )
 
         assert result is not None
@@ -1001,9 +951,6 @@ class TestDebtMintEventMatching:
         user_address = _decode_address(
             HexBytes("0x0000000000000000000000001111111111111111111111111111111111111111")
         )
-        reserve_address = _decode_address(
-            HexBytes("0x000000000000000000000000a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48")
-        )
 
         tx_context = self.create_mock_tx_context([])
         matcher = EventMatcher(tx_context)
@@ -1011,7 +958,7 @@ class TestDebtMintEventMatching:
         result = matcher.find_matching_pool_event(
             event_type=ScaledTokenEventType.DEBT_MINT,
             user_address=user_address,
-            reserve_address=reserve_address,
+            reserve_address=USDC_RESERVE_ADDRESS,
         )
 
         assert result is None
@@ -1034,9 +981,6 @@ class TestCollateralMintEventMatching:
         """Standard deposit: value > balance_increase, SUPPLY matches first."""
         user_address = _decode_address(
             HexBytes("0x0000000000000000000000001111111111111111111111111111111111111111")
-        )
-        reserve_address = _decode_address(
-            HexBytes("0x000000000000000000000000a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48")
         )
 
         supply_event = {
@@ -1062,7 +1006,7 @@ class TestCollateralMintEventMatching:
         result = matcher.find_matching_pool_event(
             event_type=ScaledTokenEventType.COLLATERAL_MINT,
             user_address=user_address,
-            reserve_address=reserve_address,
+            reserve_address=USDC_RESERVE_ADDRESS,
         )
 
         assert result is not None
@@ -1076,9 +1020,7 @@ class TestCollateralMintEventMatching:
         liquidator = _decode_address(
             HexBytes("0x0000000000000000000000001111111111111111111111111111111111111111")
         )
-        collateral_reserve = _decode_address(
-            HexBytes("0x000000000000000000000000c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2")
-        )
+        collateral_reserve = WETH_RESERVE_ADDRESS
 
         liquidation_event = {
             "topics": [
@@ -1135,9 +1077,6 @@ class TestCollateralMintEventMatching:
         user = _decode_address(
             HexBytes("0x0000000000000000000000008899fAEd2e1b0e9b7F41E08b79bE71eC3d1f9EC1")
         )
-        weth_reserve = _decode_address(
-            HexBytes("0x000000000000000000000000C02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2")
-        )
 
         # Single REPAY event shared between debt burn and collateral mint
         # repayWithATokens() with excess aTokens returned
@@ -1165,7 +1104,7 @@ class TestCollateralMintEventMatching:
         result = matcher.find_matching_pool_event(
             event_type=ScaledTokenEventType.COLLATERAL_MINT,
             user_address=user,
-            reserve_address=weth_reserve,
+            reserve_address=WETH_RESERVE_ADDRESS,
         )
 
         assert result is not None, "Collateral mint should match REPAY event"
@@ -1208,12 +1147,7 @@ class TestGHOLiquidationWithDeficitCreated:
 
         The GHO debt burn should match the DeficitCreated event, not LiquidationCall.
         """
-        user_address = _decode_address(
-            HexBytes("0x000000000000000000000000fb2788b2a3a0242429fd9ee2b151e149e3b244ec")
-        )
-        gho_reserve = _decode_address(
-            HexBytes("0x00000000000000000000000040d16fc0246ad3160ccc09b8d0d3a2cd28ae6c2f")
-        )
+        user_address = get_checksum_address("0xfb2788b2A3a0242429fd9EE2b151e149e3b244eC")
 
         # DeficitCreated event for GHO liquidation
         deficit_created_event = {
@@ -1264,7 +1198,7 @@ class TestGHOLiquidationWithDeficitCreated:
         result = matcher.find_matching_pool_event(
             event_type=ScaledTokenEventType.GHO_DEBT_BURN,
             user_address=user_address,
-            reserve_address=gho_reserve,
+            reserve_address=GHO_RESERVE_ADDRESS,
         )
 
         assert result is not None, "GHO debt burn should match DeficitCreated event"
@@ -1279,12 +1213,7 @@ class TestGHOLiquidationWithDeficitCreated:
         In multi-asset liquidations, both event types may exist.
         GHO debt burns should prioritize DeficitCreated matching.
         """
-        user_address = _decode_address(
-            HexBytes("0x000000000000000000000000fb2788b2a3a0242429fd9ee2b151e149e3b244ec")
-        )
-        gho_reserve = _decode_address(
-            HexBytes("0x00000000000000000000000040d16fc0246ad3160ccc09b8d0d3a2cd28ae6c2f")
-        )
+        user_address = get_checksum_address("0xfb2788b2A3a0242429fd9EE2b151e149e3b244eC")
 
         # DeficitCreated should be checked before LIQUIDATION_CALL in the config order
         # Current config: [REPAY, LIQUIDATION_CALL, DEFICIT_CREATED]
@@ -1306,7 +1235,7 @@ class TestGHOLiquidationWithDeficitCreated:
         result = matcher.find_matching_pool_event(
             event_type=ScaledTokenEventType.GHO_DEBT_BURN,
             user_address=user_address,
-            reserve_address=gho_reserve,
+            reserve_address=GHO_RESERVE_ADDRESS,
         )
 
         assert result is not None
@@ -1354,10 +1283,8 @@ class TestGHODebtBurnEventOrdering:
     ) -> LogReceipt:
         """Create a mock REPAY event with proper encoding."""
         # REPAY: data=(uint256 amount, bool useATokens)
-        # 77967076299900000000 in hex = 0x4a5c1d9072f662000 (32 bytes padded)
-        amount_hex = "0000000000000000000000000000000000000000000000000004a5c1d9072f662000"
-        use_atokens_hex = "0000000000000000000000000000000000000000000000000000000000000000"
-        encoded_data = HexBytes(amount_hex + use_atokens_hex)
+        amount = 77_967_076_299_900_000_000
+        encoded_data = HexBytes(eth_abi.abi.encode(["uint256", "bool"], [amount, False]))
 
         return cast(
             "LogReceipt",
@@ -1390,15 +1317,10 @@ class TestGHODebtBurnEventOrdering:
         This test verifies the fix: removing max_log_index allows matching
         GHO debt burns to REPAY events regardless of ordering.
         """
-        user_address = _decode_address(
-            HexBytes("0x000000000000000000000000b17bc7ad0e0f73db0dfe60e508445c237832a369")
-        )
-        gho_reserve = _decode_address(
-            HexBytes("0x00000000000000000000000040d16fc0246ad3160ccc09b8d0d3a2cd28ae6c2f")
-        )
+        user_address = get_checksum_address("0xB17bC7ad0E0f73Db0DfE60e508445C237832A369")
 
         # Pool REPAY event at logIndex 184 (AFTER the burn event)
-        repay_event = self.create_repay_event(gho_reserve, user_address, 184)
+        repay_event = self.create_repay_event(GHO_RESERVE_ADDRESS, user_address, 184)
 
         tx_context = self.create_mock_tx_context(cast("list[LogReceipt]", [repay_event]))
         matcher = EventMatcher(tx_context)
@@ -1408,7 +1330,7 @@ class TestGHODebtBurnEventOrdering:
         result = matcher.find_matching_pool_event(
             event_type=ScaledTokenEventType.GHO_DEBT_BURN,
             user_address=user_address,
-            reserve_address=gho_reserve,
+            reserve_address=GHO_RESERVE_ADDRESS,
         )
 
         assert result is not None, "GHO debt burn should match REPAY event"
@@ -1424,15 +1346,10 @@ class TestGHODebtBurnEventOrdering:
         This is the opposite case - ensure we didn't break the standard
         scenario where events occur in expected order.
         """
-        user_address = _decode_address(
-            HexBytes("0x000000000000000000000000b17bc7ad0e0f73db0dfe60e508445c237832a369")
-        )
-        gho_reserve = _decode_address(
-            HexBytes("0x00000000000000000000000040d16fc0246ad3160ccc09b8d0d3a2cd28ae6c2f")
-        )
+        user_address = get_checksum_address("0xB17bC7ad0E0f73Db0DfE60e508445C237832A369")
 
         # Pool REPAY event at logIndex 175 (BEFORE the burn event)
-        repay_event = self.create_repay_event(gho_reserve, user_address, 175)
+        repay_event = self.create_repay_event(GHO_RESERVE_ADDRESS, user_address, 175)
 
         tx_context = self.create_mock_tx_context(cast("list[LogReceipt]", [repay_event]))
         matcher = EventMatcher(tx_context)
@@ -1440,7 +1357,7 @@ class TestGHODebtBurnEventOrdering:
         result = matcher.find_matching_pool_event(
             event_type=ScaledTokenEventType.GHO_DEBT_BURN,
             user_address=user_address,
-            reserve_address=gho_reserve,
+            reserve_address=GHO_RESERVE_ADDRESS,
         )
 
         assert result is not None, "GHO debt burn should match REPAY event"
@@ -1453,21 +1370,15 @@ class TestGHODebtBurnEventOrdering:
         This tests realistic scenarios where the transaction contains
         multiple pool events (e.g., other users' REPAY events).
         """
-        user_address = _decode_address(
-            HexBytes("0x000000000000000000000000b17bc7ad0e0f73db0dfe60e508445c237832a369")
-        )
-        gho_reserve = _decode_address(
-            HexBytes("0x00000000000000000000000040d16fc0246ad3160ccc09b8d0d3a2cd28ae6c2f")
-        )
-        other_user = _decode_address(
-            HexBytes("0x000000000000000000000000aaaaaa7ada777aa7ada777aa7ada777aa7ada777")
-        )
+
+        user_address = get_checksum_address("0xB17bC7ad0E0f73Db0DfE60e508445C237832A369")
+        other_user = get_checksum_address("0xaaaaaa7ada777aa7ada777aa7ada777aa7ada777")
 
         # REPAY for different user (should not match)
-        other_repay = self.create_repay_event(gho_reserve, other_user, 182)
+        other_repay = self.create_repay_event(GHO_RESERVE_ADDRESS, other_user, 182)
 
         # Target REPAY for GHO (correct user and reserve)
-        gho_repay = self.create_repay_event(gho_reserve, user_address, 184)
+        gho_repay = self.create_repay_event(GHO_RESERVE_ADDRESS, user_address, 184)
 
         tx_context = self.create_mock_tx_context(cast("list[LogReceipt]", [other_repay, gho_repay]))
         matcher = EventMatcher(tx_context)
@@ -1475,7 +1386,7 @@ class TestGHODebtBurnEventOrdering:
         result = matcher.find_matching_pool_event(
             event_type=ScaledTokenEventType.GHO_DEBT_BURN,
             user_address=user_address,
-            reserve_address=gho_reserve,
+            reserve_address=GHO_RESERVE_ADDRESS,
         )
 
         assert result is not None
@@ -1537,15 +1448,10 @@ class TestDebtMintMaxLogIndex:
         - BORROW event can appear AFTER the VariableDebtToken Mint event
         - The max_log_index constraint was preventing valid matches
         """
-        user_address = _decode_address(
-            HexBytes("0x000000000000000000000000310a2c115d3d45a89b59640fff859be0f54a08e2")
-        )
-        wsteth_reserve = _decode_address(
-            HexBytes("0x0000000000000000000000007f39c581f595b53c5cb19bd0b3f8da6c935e2ca0")
-        )
+        user_address = get_checksum_address("0x310A2C115D3D45A89B59640FFF859BE0F54A08E2")
 
         # BORROW event at logIndex 380 (AFTER the mint event at 376)
-        borrow_event = self.create_borrow_event(wsteth_reserve, user_address, 380)
+        borrow_event = self.create_borrow_event(WSTETH_RESERVE_ADDRESS, user_address, 380)
 
         tx_context = self.create_mock_tx_context(cast("list[LogReceipt]", [borrow_event]))
         matcher = EventMatcher(tx_context)
@@ -1555,7 +1461,7 @@ class TestDebtMintMaxLogIndex:
         result = matcher.find_matching_pool_event(
             event_type=ScaledTokenEventType.DEBT_MINT,
             user_address=user_address,
-            reserve_address=wsteth_reserve,
+            reserve_address=WSTETH_RESERVE_ADDRESS,
         )
 
         assert result is not None, "Debt mint should match BORROW even with higher logIndex"
@@ -1569,15 +1475,10 @@ class TestDebtMintMaxLogIndex:
 
         This is the standard case - ensure we didn't break normal operation.
         """
-        user_address = _decode_address(
-            HexBytes("0x000000000000000000000000310a2c115d3d45a89b59640fff859be0f54a08e2")
-        )
-        wsteth_reserve = _decode_address(
-            HexBytes("0x0000000000000000000000007f39c581f595b53c5cb19bd0b3f8da6c935e2ca0")
-        )
+        user_address = get_checksum_address("0x310A2C115D3D45A89B59640FFF859BE0F54A08E2")
 
         # BORROW event at logIndex 370 (BEFORE the mint event)
-        borrow_event = self.create_borrow_event(wsteth_reserve, user_address, 370)
+        borrow_event = self.create_borrow_event(WSTETH_RESERVE_ADDRESS, user_address, 370)
 
         tx_context = self.create_mock_tx_context(cast("list[LogReceipt]", [borrow_event]))
         matcher = EventMatcher(tx_context)
@@ -1585,7 +1486,7 @@ class TestDebtMintMaxLogIndex:
         result = matcher.find_matching_pool_event(
             event_type=ScaledTokenEventType.DEBT_MINT,
             user_address=user_address,
-            reserve_address=wsteth_reserve,
+            reserve_address=WSTETH_RESERVE_ADDRESS,
         )
 
         assert result is not None, "Debt mint should match BORROW event"
@@ -1599,20 +1500,15 @@ class TestDebtMintMaxLogIndex:
         - Each BORROW should be matched exactly once
         - Consumption tracking should prevent double-matching
         """
-        user_address = _decode_address(
-            HexBytes("0x000000000000000000000000310a2c115d3d45a89b59640fff859be0f54a08e2")
-        )
-        wsteth_reserve = _decode_address(
-            HexBytes("0x0000000000000000000000007f39c581f595b53c5cb19bd0b3f8da6c935e2ca0")
-        )
+        user_address = get_checksum_address("0x310A2C115D3D45A89B59640FFF859BE0F54A08E2")
 
         # Create 5 BORROW events (simulating the transaction from debug/aave/0043)
         borrow_events = [
-            self.create_borrow_event(wsteth_reserve, user_address, 360, 42_000),
-            self.create_borrow_event(wsteth_reserve, user_address, 370, 92_000),
-            self.create_borrow_event(wsteth_reserve, user_address, 380, 84_505),
-            self.create_borrow_event(wsteth_reserve, user_address, 390, 76_010),
-            self.create_borrow_event(wsteth_reserve, user_address, 400, 68_434),
+            self.create_borrow_event(WSTETH_RESERVE_ADDRESS, user_address, 360, 42_000),
+            self.create_borrow_event(WSTETH_RESERVE_ADDRESS, user_address, 370, 92_000),
+            self.create_borrow_event(WSTETH_RESERVE_ADDRESS, user_address, 380, 84_505),
+            self.create_borrow_event(WSTETH_RESERVE_ADDRESS, user_address, 390, 76_010),
+            self.create_borrow_event(WSTETH_RESERVE_ADDRESS, user_address, 400, 68_434),
         ]
 
         tx_context = self.create_mock_tx_context(cast("list[LogReceipt]", borrow_events))
@@ -1624,7 +1520,7 @@ class TestDebtMintMaxLogIndex:
             result = matcher.find_matching_pool_event(
                 event_type=ScaledTokenEventType.DEBT_MINT,
                 user_address=user_address,
-                reserve_address=wsteth_reserve,
+                reserve_address=WSTETH_RESERVE_ADDRESS,
             )
             assert result is not None, "Each debt mint should find a BORROW"
             matched_amounts.append(result["extraction_data"]["raw_amount"])

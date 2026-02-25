@@ -19,7 +19,6 @@ from degenbot.cli.aave_transaction_operations import (
     TransactionValidationError,
 )
 
-
 # Test token addresses - used for classification
 TEST_COLLATERAL_TOKEN = get_checksum_address("0x" + "1" * 40)  # aToken
 TEST_DEBT_TOKEN = get_checksum_address("0x" + "2" * 40)  # vToken
@@ -569,7 +568,7 @@ class TestOperationValidation:
             tx_ops.validate([debt_burn_event, liquidation_event])
 
         error_str = str(exc_info.value)
-        assert "Expected 1 collateral event" in error_str
+        assert "Expected at least 1 collateral event" in error_str
         assert "DEBUG NOTE" in error_str
         assert "logIndex" in error_str
 
