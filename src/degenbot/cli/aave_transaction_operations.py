@@ -406,10 +406,12 @@ class TransactionOperationsParser:
 
         # Step 4c: Create INTEREST_ACCRUAL operations for unassigned scaled token events
         # that represent interest accrual (amount == balance_increase)
+        # Skip DEBT_MINT extraction if there's a LIQUIDATION_CALL (flash loan pattern)
         interest_accrual_ops = self._create_interest_accrual_operations(
             scaled_events=scaled_events,
             assigned_indices=assigned_log_indices,
             starting_operation_id=len(operations),
+            all_events=events,
         )
         operations.extend(interest_accrual_ops)
         assigned_log_indices.update(
@@ -990,7 +992,7 @@ class TransactionOperationsParser:
 
         is_gho = debt_asset == GHO_TOKEN_ADDRESS
 
-        # Find debt burn
+        # Find debt burn (standard liquidation)
         debt_burn = None
         for ev in scaled_events:
             if ev.event["logIndex"] in assigned_indices:
@@ -1017,6 +1019,12 @@ class TransactionOperationsParser:
             elif ev.event_type == "COLLATERAL_TRANSFER":
                 if ev.user_address == user:
                     collateral_transfers.append(ev)
+            elif ev.event_type == "UNKNOWN_TRANSFER":
+                # Fallback: when token address isn't in mapping, BalanceTransfer
+                # decodes as UNKNOWN_TRANSFER. Match by user address - if the
+                # transfer is FROM the liquidated user, it's likely collateral.
+                if ev.user_address == user:
+                    collateral_transfers.append(ev)
 
         scaled_token_events = []
         balance_transfer_events = []
@@ -1025,14 +1033,11 @@ class TransactionOperationsParser:
         if collateral_burn:
             scaled_token_events.append(collateral_burn)
         if collateral_transfers:
-            # Separate ERC20 Transfers (index=0) from BalanceTransfer events (index>0)
+            # Add all collateral transfers to scaled_token_events
+            # Both ERC20 Transfers (index=0) and BalanceTransfer events (index>0)
+            # are collateral events that should be validated together
             for transfer in collateral_transfers:
-                if transfer.index == 0:
-                    # ERC20 Transfer
-                    scaled_token_events.append(transfer)
-                else:
-                    # BalanceTransfer event - store raw LogReceipt
-                    balance_transfer_events.append(transfer.event)
+                scaled_token_events.append(transfer)
 
         op_type = OperationType.GHO_LIQUIDATION if is_gho else OperationType.LIQUIDATION
 
@@ -1114,6 +1119,7 @@ class TransactionOperationsParser:
         scaled_events: list[ScaledTokenEvent],
         assigned_indices: set[int],
         starting_operation_id: int,
+        all_events: list[LogReceipt],
     ) -> list[Operation]:
         """Create INTEREST_ACCRUAL operations for unassigned interest events.
 
@@ -1126,10 +1132,20 @@ class TransactionOperationsParser:
             scaled_events: All scaled token events from the transaction
             assigned_indices: Set of log indices already assigned to operations
             starting_operation_id: The next available operation ID
+            all_events: All events from the transaction (to check for LIQUIDATION_CALL)
 
         Returns:
             List of INTEREST_ACCRUAL operations
         """
+        # Check for pool events that indicate complex transactions
+        # In these transactions, DEBT_MINT events may be associated with operations, not interest
+        has_liquidation = any(
+            ev["topics"][0] == AaveV3Event.LIQUIDATION_CALL.value for ev in all_events
+        )
+        has_borrow = any(ev["topics"][0] == AaveV3Event.BORROW.value for ev in all_events)
+        has_repay = any(ev["topics"][0] == AaveV3Event.REPAY.value for ev in all_events)
+        # Check if there's a collateral burn in the transaction (indicates repayWithATokens)
+        has_collateral_burn = any(ev.event_type == "COLLATERAL_BURN" for ev in scaled_events)
         operations: list[Operation] = []
         operation_id = starting_operation_id
         local_assigned: set[int] = set()
@@ -1144,6 +1160,16 @@ class TransactionOperationsParser:
             # Only process mint events that represent interest accrual
             if ev.event_type not in {"COLLATERAL_MINT", "DEBT_MINT", "GHO_DEBT_MINT"}:
                 continue
+
+            # Skip DEBT_MINT in liquidation/borrow transactions - these may be
+            # flash borrows. For REPAY transactions, only skip if there's no
+            # collateral burn (if there is, it's repayWithATokens and DEBT_MINT
+            # should become INTEREST_ACCRUAL).
+            if ev.event_type in {"DEBT_MINT", "GHO_DEBT_MINT"}:
+                if has_liquidation or has_borrow:
+                    continue
+                if has_repay and not has_collateral_burn:
+                    continue
 
             # Interest accrual: balance_increase > 0
             # Note: For pure interest, amount == balance_increase
