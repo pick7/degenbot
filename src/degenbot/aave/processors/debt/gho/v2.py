@@ -59,7 +59,7 @@ class GhoV2Processor(GhoV1Processor):
             current_index=event_data.index,
         )
 
-        if event_data.value > event_data.balance_increase:
+        if event_data.value >= event_data.balance_increase:
             # GHO BORROW: emitted in _mintScaled
             requested_amount = event_data.value - event_data.balance_increase
             amount_scaled = wad_ray_math.ray_div(

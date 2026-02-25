@@ -17,6 +17,25 @@ CLI command implementations for Aave V3, liquidity pools, exchanges, and databas
 - `--verify`: Verify positions at block boundaries (default: True)
 - `--one-chunk`: Stop after first chunk (default: False)
 - `--no-progress-bar`: Disable progress bars (default: False)
+- `--debug-output`: Path to write structured JSON debug output for autonomous agent analysis
+
+**Aave Debug Output** (`--debug-output`):
+Structured JSON Lines format for machine parsing:
+- Transaction start/end markers with full context
+- Block boundary processing logs
+- Exception details with transaction context for replay
+- Event counts and user addresses per transaction
+
+Example:
+```bash
+degenbot aave update --debug-output ./debug/aave-update-$(date +%Y%m%d-%H%M%S).jsonl
+```
+
+Log entry types:
+- `session_start` / `session_end`: Session markers
+- `transaction_start` / `transaction_end`: Transaction processing lifecycle
+- `block_boundary`: Block processing markers
+- `exception`: Full exception context with TransactionContext serialization
 
 **Liquidity Pools**
 - `pool.py` - Commands: `update`

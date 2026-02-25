@@ -149,7 +149,7 @@ class DebtV5Processor(DebtV1Processor):
         """
         wad_ray_math = self._math_libs["wad_ray"]
 
-        if event_data.value > event_data.balance_increase:
+        if event_data.value >= event_data.balance_increase:
             # BORROW path: emitted in _mintScaled
             if scaled_delta is not None:
                 # Use pre-calculated scaled amount from borrow amount

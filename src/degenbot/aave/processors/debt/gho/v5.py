@@ -116,7 +116,7 @@ class GhoV5Processor(GhoDebtTokenProcessor):
         """
         wad_ray_math = self._math_libs["wad_ray"]
 
-        if event_data.value > event_data.balance_increase:
+        if event_data.value >= event_data.balance_increase:
             # GHO BORROW: emitted in _mintScaled
             #
             # Revision 5+ uses ceiling division (ray_div_ceil) for BORROW

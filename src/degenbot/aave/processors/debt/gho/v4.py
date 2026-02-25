@@ -93,7 +93,7 @@ class GhoV4Processor(GhoDebtTokenProcessor):
         """
         wad_ray_math = self._math_libs["wad_ray"]
 
-        if event_data.value > event_data.balance_increase:
+        if event_data.value >= event_data.balance_increase:
             # GHO BORROW: emitted in _mintScaled
             #
             # Revision 4 uses standard rayDiv (rounding half up) via _mintScaled.

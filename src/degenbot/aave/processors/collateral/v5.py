@@ -143,7 +143,7 @@ class CollateralV5Processor(CollateralV1Processor):
                 b=event_data.index,
             )
             is_repay = True
-        elif event_data.value > event_data.balance_increase:
+        elif event_data.value >= event_data.balance_increase:
             # Standard deposit
             if scaled_delta is not None:
                 balance_delta = scaled_delta

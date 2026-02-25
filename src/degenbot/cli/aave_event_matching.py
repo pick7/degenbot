@@ -777,9 +777,6 @@ class OperationAwareEventMatcher:
             EventMatchResult with pool_event, should_consume flag, and extraction_data,
             or None if no match found.
         """
-        if self.operation.pool_event is None:
-            return None
-
         # Pattern-aware matching based on operation type
         matchers = {
             OperationType.SUPPLY: self._match_supply,
@@ -792,11 +789,14 @@ class OperationAwareEventMatcher:
             OperationType.LIQUIDATION: self._match_liquidation,
             OperationType.GHO_LIQUIDATION: self._match_gho_liquidation,
             OperationType.GHO_FLASH_LOAN: self._match_flash_loan,
+            OperationType.INTEREST_ACCRUAL: self._match_interest_accrual,
+            OperationType.BALANCE_TRANSFER: self._match_balance_transfer,
         }
 
         matcher = matchers.get(self.operation.operation_type)
         if matcher:
-            return matcher(scaled_event)
+            result = matcher(scaled_event)
+            return result
 
         # Default matching for unknown operation types
         return self._default_match(scaled_event)
@@ -905,6 +905,30 @@ class OperationAwareEventMatcher:
             pool_event=self.operation.pool_event,
             should_consume=False,  # DEFICIT_CREATED is reusable
             extraction_data=self._extract_deficit_data(),
+        )
+
+    def _match_interest_accrual(self, scaled_event: ScaledTokenEvent) -> EventMatchResult:
+        """Match interest accrual operation.
+
+        Interest accrual operations have no pool event. The scaled token event
+        represents pure interest accrual where amount == balance_increase.
+        """
+        return EventMatchResult(
+            pool_event=self.operation.pool_event,  # type: ignore[arg-type]
+            should_consume=False,
+            extraction_data={},
+        )
+
+    def _match_balance_transfer(self, scaled_event: ScaledTokenEvent) -> EventMatchResult:
+        """Match balance transfer operation.
+
+        Balance transfer operations have no pool event. The scaled token event
+        represents an ERC20 Transfer of aTokens or vTokens between users.
+        """
+        return EventMatchResult(
+            pool_event=self.operation.pool_event,  # type: ignore[arg-type]
+            should_consume=False,
+            extraction_data={},
         )
 
     def _default_match(self, scaled_event: ScaledTokenEvent) -> EventMatchResult | None:

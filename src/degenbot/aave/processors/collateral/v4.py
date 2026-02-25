@@ -95,7 +95,7 @@ class CollateralV4Processor(CollateralV1Processor):
                 b=event_data.index,
             )
             is_repay = True
-        elif event_data.value > event_data.balance_increase:
+        elif event_data.value >= event_data.balance_increase:
             # Standard deposit
             if event_data.scaled_amount is not None:
                 # Use pre-calculated scaled amount from Pool contract

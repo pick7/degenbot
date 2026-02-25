@@ -3,13 +3,12 @@ description: Debug Aave update failures
 agent: build
 ---
 
-!`DEGENBOT_DEBUG=1 DEGENBOT_VERBOSE_USERS=$ARGUMENTS uv run degenbot aave update --no-progress-bar --one-chunk --chunk 1 2>&1`
-
-## DIRECTION: Investigate and debug this failed Aave update command. Find the root cause of the bug and fix it. The Aave update command for this debugging session is **`uv run degenbot aave update --no-progress-bar --one-chunk --chunk 1 2>&1`**.
+## DIRECTION: 
+Execute `uv run degenbot aave update` with the option `--debug-output=./.opencode/tmp/{FILE}.log`, specifying a new log filename
 
 ## PROCESS:
 ### 1. Gather Information
-- Parse the output to identify information about the events, processes, and state logs leading up to the failed verification
+- Grep the log for "exception" to identify the failure. Grep for relevant events, processes, and state logs leading up to the failure
 - @evm-investigator Perform a thorough investigation of the transaction; use all known information about the blocks, transactions, and operations leading to the invalid state; Determine the implementation address and associated revision for proxy contracts involved in the transaction, e.g., AToken, VariableDebtToken, GHOVariableDebtToken, Pool, stkAAVE; use contract source code in @contract_reference/aave if available
 
 ### 2. Investigate Code
@@ -17,26 +16,12 @@ agent: build
 - Determine the revision of all versioned implementations, libraries, and processors that were used during processing. Check the reference contracts in @contract_reference/aave
 - Make a failure hypothesis
 
-### 3. Validate Execution Path and Failure Hypothesis
-- Consider enabling function call logging along the execution path by decorating functions and methods with `log_function_call`, e.g.,
-    ```python
-    @log_function_call
-    def some_func(...): ...  
-    ```
-- Determine if an debugging env var is useful:
-    - `DEGENBOT_VERBOSE_USER=0x123...,0x456...`
-    - `DEGENBOT_VERBOSE_TX=0xabc...,0xdef...`
-    - `DEGENBOT_VERBOSE_ALL=1`
-    - `DEGENBOT_DEBUG=1`
-    - `DEGENBOT_DEBUG_FUNCTION_CALLS=1` which will show function call logs
-- Run the update command with selected verbosity env vars prepended
-
-### 4. Validate & Fix
+### 3. Validate & Fix
 - Determine the root cause, e.g., a processing function failed to determine the correct value from an event, the database had a stale value, a previous processing action set a value incorrectly which was used by another processing action
-- Design a fix to resolve the bug. If a unique transaction requires adding sophistication to transaction matching and event validation, fix that instead of accumulating hacks and special cases within general processors
-- Apply a fix to resolve the bug, refactor and clean up code involved with this failure, then run the update command again to confirm the fix was successful
+- Design the fix to resolve the bug. If a unique transaction requires adding sophistication to transaction matching and event validation, fix that. Do not accumulate hacks and special cases within general processors
+- Apply the fix to resolve the bug, refactor and clean up code involved with this failure, then run the update command again to confirm the fix was successful
 
-### 5. Document Findings
+### 4. Document Findings
 Create a new report in @debug/aave. Follow this format:
 - **Issue:** Brief title
 - **Date:** Current date
@@ -48,8 +33,8 @@ Create a new report in @debug/aave. Follow this format:
 - **Refactoring:** Concise summary of proposed improvements to code that processes these transactions
 - **Filename:** {four digit ID} - {issue title}
 
-### 6. Write Tests
+### 5. Write Tests
 - Use the investigation report and transaction details to write a stateless unit test to verify that the math operations, user operation determination, event matching logic, etc., match the expectations.
 
-### 7. Clean Up
+### 6. Clean Up
 - Remove unneeded files in @.opencode/tmp

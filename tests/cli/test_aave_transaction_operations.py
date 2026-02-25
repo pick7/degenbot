@@ -515,7 +515,7 @@ class TestOperationParsing:
         mint_event = EventFactory.create_collateral_mint_event(
             user=user2,
             amount=2000000000000000000,
-            balance_increase=2000000000000000000,
+            balance_increase=1999999999999999999,  # Less than amount for deposit
             log_index=102,  # After supply
         )
 
@@ -593,7 +593,7 @@ class TestOperationValidation:
         debt_mint_event = EventFactory.create_debt_mint_event(
             user=user,
             amount=500000000000000000,
-            balance_increase=500000000000000000,
+            balance_increase=499999999999999999,  # Less than amount for borrow
             log_index=97,
         )
 
@@ -759,19 +759,32 @@ class TestOperationValidation:
             HexBytes("0x" + "00" * 32),
         )
 
-        # Should have 1 operation (LIQUIDATION)
-        assert len(tx_ops.operations) == 1
-        op = tx_ops.operations[0]
-        assert op.operation_type == OperationType.LIQUIDATION
+        # Should have 2 operations: LIQUIDATION + INTEREST_ACCRUAL
+        assert len(tx_ops.operations) == 2
+
+        # Find the liquidation operation
+        liq_ops = [op for op in tx_ops.operations if op.operation_type == OperationType.LIQUIDATION]
+        assert len(liq_ops) == 1
+        liq_op = liq_ops[0]
 
         # Should have 1 collateral event (the transfer, not a burn)
-        collateral_events = [e for e in op.scaled_token_events if e.is_collateral]
+        collateral_events = [e for e in liq_op.scaled_token_events if e.is_collateral]
         assert len(collateral_events) == 1
         assert collateral_events[0].event_type == "COLLATERAL_TRANSFER"
 
-        # Validation should pass - no exception raised
+        # Find the interest accrual operation
+        interest_ops = [
+            op for op in tx_ops.operations if op.operation_type == OperationType.INTEREST_ACCRUAL
+        ]
+        assert len(interest_ops) == 1
+        interest_op = interest_ops[0]
+        assert len(interest_op.scaled_token_events) == 1
+        assert interest_op.scaled_token_events[0].event_type == "COLLATERAL_MINT"
+
+        # Validation should pass
         tx_ops.validate([interest_mint, collateral_transfer, liquidation_event])
-        assert op.is_valid()
+        assert liq_op.is_valid()
+        assert interest_op.is_valid()
 
     def test_repay_with_atokens_zero_debt_events(self):
         """REPAY_WITH_ATOKENS with 0 debt events (interest-only repayment edge case).
@@ -812,18 +825,34 @@ class TestOperationValidation:
             HexBytes("0x" + "00" * 32),
         )
 
-        assert len(tx_ops.operations) == 1
-        op = tx_ops.operations[0]
+        # Should have 2 operations: REPAY_WITH_ATOKENS + INTEREST_ACCRUAL
+        assert len(tx_ops.operations) == 2
 
-        assert op.operation_type == OperationType.REPAY_WITH_ATOKENS
+        # Find the repay operation
+        repay_ops = [
+            op for op in tx_ops.operations if op.operation_type == OperationType.REPAY_WITH_ATOKENS
+        ]
+        assert len(repay_ops) == 1
+        repay_op = repay_ops[0]
+
         # Should have only 1 scaled token event (the collateral burn)
         # The interest mint is not matched to this operation
-        assert len(op.scaled_token_events) == 1
-        assert op.scaled_token_events[0].event_type == "COLLATERAL_BURN"
+        assert len(repay_op.scaled_token_events) == 1
+        assert repay_op.scaled_token_events[0].event_type == "COLLATERAL_BURN"
 
-        # Validation should pass with 0 debt events
+        # Find the interest accrual operation
+        interest_ops = [
+            op for op in tx_ops.operations if op.operation_type == OperationType.INTEREST_ACCRUAL
+        ]
+        assert len(interest_ops) == 1
+        interest_op = interest_ops[0]
+        assert len(interest_op.scaled_token_events) == 1
+        assert interest_op.scaled_token_events[0].event_type == "DEBT_MINT"
+
+        # Validation should pass
         tx_ops.validate([interest_mint_event, collateral_burn_event, repay_event])
-        assert op.is_valid()
+        assert repay_op.is_valid()
+        assert interest_op.is_valid()
 
     def test_gho_liquidation_dust_validates_with_zero_debt_burns(self):
         """Dust GHO liquidation validates with 0 GHO debt burns (only collateral transfer).

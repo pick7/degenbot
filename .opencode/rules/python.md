@@ -7,9 +7,6 @@ class EVMRevertError(DegenbotError):
     """Raised when a simulated EVM contract operation would revert."""
 ```
 
-## Function Calls
-- Use keyword arguments unless the function is written specifically as positional
-
 ## Error Handling
 - All exceptions inherit from `DegenbotError` in `src/degenbot/exceptions/base.py`
 - Create specific subtypes for distinct categories

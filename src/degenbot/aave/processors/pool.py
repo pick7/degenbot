@@ -81,6 +81,20 @@ class PoolProcessor:
         """
         return self.token_math.get_debt_burn_scaled_amount(amount, borrow_index)
 
+    def calculate_collateral_transfer_scaled_amount(self, amount: int, liquidity_index: int) -> int:
+        """Calculate scaled amount for collateral transfer.
+
+        Uses ceil rounding to ensure recipient receives at least the requested amount.
+
+        Args:
+            amount: The underlying amount to transfer
+            liquidity_index: The current liquidity index
+
+        Returns:
+            The scaled amount to transfer
+        """
+        return self.token_math.get_collateral_transfer_scaled_amount(amount, liquidity_index)
+
 
 class PoolProcessorFactory:
     """Factory for creating PoolProcessor instances by version."""

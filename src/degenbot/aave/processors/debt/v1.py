@@ -53,14 +53,19 @@ class DebtV1Processor(DebtTokenProcessor):
         """
         wad_ray_math = self._math_libs["wad_ray"]
 
-        if event_data.value > event_data.balance_increase:
+        if event_data.value >= event_data.balance_increase:
             # BORROW path: emitted in _mintScaled
-            # Solidity: uint256 amountToMint = amount + balanceIncrease;
-            requested_amount = event_data.value - event_data.balance_increase
-            balance_delta = wad_ray_math.ray_div(
-                a=requested_amount,
-                b=event_data.index,
-            )
+            if event_data.scaled_amount is not None:
+                # Use pre-calculated scaled amount from BORROW event
+                balance_delta = event_data.scaled_amount
+            else:
+                # Fallback: calculate from event data
+                # Solidity: uint256 amountToMint = amount + balanceIncrease;
+                requested_amount = event_data.value - event_data.balance_increase
+                balance_delta = wad_ray_math.ray_div(
+                    a=requested_amount,
+                    b=event_data.index,
+                )
             is_repay = False
         else:
             # REPAY path: emitted in _burnScaled
