@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import ClassVar, Protocol, TypedDict
 
-import eth_abi.abi
+from eth_abi.abi import decode
 from eth_typing import ChecksumAddress
 from hexbytes import HexBytes
 from web3.types import LogReceipt
@@ -134,7 +134,7 @@ class MatchConfig:
 class EventMatchResult(TypedDict):
     """Result of a successful event match."""
 
-    pool_event: LogReceipt
+    pool_event: LogReceipt | None
     should_consume: bool
     extraction_data: dict[str, int]
 
@@ -358,7 +358,7 @@ class EventMatcher:
             # BORROW: topics[1]=reserve, topics[2]=onBehalfOf, data=(amount, interestRateMode)
             event_reserve = _decode_address(pool_event["topics"][1])
             event_on_behalf_of = _decode_address(pool_event["topics"][2])
-            (_, _, interest_rate_mode, _) = eth_abi.abi.decode(
+            (_, _, interest_rate_mode, _) = decode(
                 types=["address", "uint256", "uint8", "uint256"],
                 data=pool_event["data"],
             )
@@ -619,7 +619,7 @@ class EventMatcher:
 
         if event_topic == AaveV3Event.SUPPLY.value:
             # SUPPLY: data=(address caller, uint256 amount)
-            (_, raw_amount) = eth_abi.abi.decode(
+            (_, raw_amount) = decode(
                 types=["address", "uint256"],
                 data=pool_event["data"],
             )
@@ -627,7 +627,7 @@ class EventMatcher:
 
         elif event_topic == AaveV3Event.WITHDRAW.value:
             # WITHDRAW: data=(uint256 amount)
-            (raw_amount,) = eth_abi.abi.decode(
+            (raw_amount,) = decode(
                 types=["uint256"],
                 data=pool_event["data"],
             )
@@ -635,7 +635,7 @@ class EventMatcher:
 
         elif event_topic == AaveV3Event.BORROW.value:
             # BORROW: data=(address caller, uint256 amount, uint8 interestRateMode, uint256 borrowRate)
-            (_, raw_amount, _, _) = eth_abi.abi.decode(
+            (_, raw_amount, _, _) = decode(
                 types=["address", "uint256", "uint8", "uint256"],
                 data=pool_event["data"],
             )
@@ -643,7 +643,7 @@ class EventMatcher:
 
         elif event_topic == AaveV3Event.REPAY.value:
             # REPAY: data=(uint256 amount, bool useATokens)
-            raw_amount, use_a_tokens = eth_abi.abi.decode(
+            raw_amount, use_a_tokens = decode(
                 types=["uint256", "bool"],
                 data=pool_event["data"],
             )
@@ -653,7 +653,7 @@ class EventMatcher:
         elif event_topic == AaveV3Event.LIQUIDATION_CALL.value:
             # LIQUIDATION_CALL: data=(uint256 debtToCover, uint256 liquidatedCollateralAmount,
             #                          address liquidator, bool receiveAToken)
-            debt_to_cover, liquidated_collateral, _, _ = eth_abi.abi.decode(
+            debt_to_cover, liquidated_collateral, _, _ = decode(
                 types=["uint256", "uint256", "address", "bool"],
                 data=pool_event["data"],
             )
@@ -662,7 +662,7 @@ class EventMatcher:
 
         elif event_topic == AaveV3Event.DEFICIT_CREATED.value:
             # DEFICIT_CREATED: data=(uint256 amountCreated)
-            (amount_created,) = eth_abi.abi.decode(
+            (amount_created,) = decode(
                 types=["uint256"],
                 data=pool_event["data"],
             )
@@ -694,7 +694,7 @@ def _should_consume_collateral_burn_pool_event(pool_event: LogReceipt) -> bool:
 
     if event_topic == AaveV3Event.REPAY.value:
         # REPAY: data=(uint256 amount, bool useATokens)
-        _, use_a_tokens = eth_abi.abi.decode(
+        _, use_a_tokens = decode(
             types=["uint256", "bool"],
             data=pool_event["data"],
         )
@@ -777,7 +777,7 @@ def _should_consume_debt_burn_pool_event(pool_event: LogReceipt) -> bool:
 
     if event_topic == AaveV3Event.REPAY.value:
         # REPAY: data=(uint256 amount, bool useATokens)
-        _, use_a_tokens = eth_abi.abi.decode(
+        _, use_a_tokens = decode(
             types=["uint256", "bool"],
             data=pool_event["data"],
         )
@@ -1004,7 +1004,7 @@ class OperationAwareEventMatcher:
         represents pure interest accrual where amount == balance_increase.
         """
         return EventMatchResult(
-            pool_event=self.operation.pool_event,  # type: ignore[arg-type]
+            pool_event=self.operation.pool_event,
             should_consume=False,
             extraction_data={},
         )
@@ -1016,7 +1016,7 @@ class OperationAwareEventMatcher:
         represents an ERC20 Transfer of aTokens or vTokens between users.
         """
         return EventMatchResult(
-            pool_event=self.operation.pool_event,  # type: ignore[arg-type]
+            pool_event=self.operation.pool_event,
             should_consume=False,
             extraction_data={},
         )
@@ -1035,19 +1035,22 @@ class OperationAwareEventMatcher:
     def _extract_supply_data(self) -> dict[str, int]:
         """Extract data from SUPPLY event."""
         # SUPPLY: data=(address caller, uint256 amount)
-        caller, raw_amount = eth_abi.decode(
-            types=["address", "uint256"],
+        if self.operation.pool_event is None:
+            return {"raw_amount": 0}
+        raw_amount = decode(
+            types=["uint256"],
             data=self.operation.pool_event["data"],
-        )
+        )[0]
         return {
             "raw_amount": raw_amount,
-            "caller": caller,
         }
 
     def _extract_withdraw_data(self) -> dict[str, int]:
         """Extract data from WITHDRAW event."""
         # WITHDRAW: data=(uint256 amount)
-        raw_amount = eth_abi.decode(
+        if self.operation.pool_event is None:
+            return {"raw_amount": 0}
+        raw_amount = decode(
             types=["uint256"],
             data=self.operation.pool_event["data"],
         )[0]
@@ -1058,21 +1061,22 @@ class OperationAwareEventMatcher:
     def _extract_borrow_data(self) -> dict[str, int]:
         """Extract data from BORROW event."""
         # BORROW: data=(address caller, uint256 amount, uint8 interestRateMode, uint256 borrowRate)
-        caller, raw_amount, interest_rate_mode, borrow_rate = eth_abi.decode(
-            types=["address", "uint256", "uint8", "uint256"],
+        if self.operation.pool_event is None:
+            return {"raw_amount": 0}
+        raw_amount = decode(
+            types=["uint256"],
             data=self.operation.pool_event["data"],
-        )
+        )[0]
         return {
             "raw_amount": raw_amount,
-            "caller": caller,
-            "interest_rate_mode": interest_rate_mode,
-            "borrow_rate": borrow_rate,
         }
 
     def _extract_repay_data(self) -> dict[str, int | bool]:
         """Extract data from REPAY event."""
         # REPAY: data=(uint256 amount, bool useATokens)
-        raw_amount, use_a_tokens = eth_abi.decode(
+        if self.operation.pool_event is None:
+            return {"raw_amount": 0, "use_a_tokens": False}
+        raw_amount, use_a_tokens = decode(
             types=["uint256", "bool"],
             data=self.operation.pool_event["data"],
         )
@@ -1085,21 +1089,23 @@ class OperationAwareEventMatcher:
         """Extract data from LIQUIDATION_CALL event."""
         # LIQUIDATION_CALL: data=(uint256 debtToCover, uint256 liquidatedCollateralAmount,
         #                          address liquidator, bool receiveAToken)
-        debt_to_cover, liquidated_collateral, liquidator, receive_a_token = eth_abi.decode(
-            types=["uint256", "uint256", "address", "bool"],
+        if self.operation.pool_event is None:
+            return {"debt_to_cover": 0, "liquidated_collateral": 0}
+        debt_to_cover, liquidated_collateral = decode(
+            types=["uint256", "uint256"],
             data=self.operation.pool_event["data"],
-        )
+        )[:2]
         return {
             "debt_to_cover": debt_to_cover,
             "liquidated_collateral": liquidated_collateral,
-            "liquidator": liquidator,
-            "receive_a_token": receive_a_token,
         }
 
     def _extract_deficit_data(self) -> dict[str, int]:
         """Extract data from DEFICIT_CREATED event."""
         # DEFICIT_CREATED: data=(uint256 amountCreated)
-        amount_created = eth_abi.decode(
+        if self.operation.pool_event is None:
+            return {"amount_created": 0}
+        amount_created = decode(
             types=["uint256"],
             data=self.operation.pool_event["data"],
         )[0]

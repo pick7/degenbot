@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import TypedDict
 
-import eth_abi
+from eth_abi.abi import decode
 from eth_typing import ChecksumAddress
 from hexbytes import HexBytes
 from web3.types import LogReceipt
@@ -179,7 +179,7 @@ class Operation:
 class EventMatchResult(TypedDict):
     """Result of a successful event match."""
 
-    pool_event: LogReceipt
+    pool_event: LogReceipt | None
     should_consume: bool
     extraction_data: dict[str, int | bool]
 
@@ -503,7 +503,7 @@ class TransactionOperationsParser:
         try:
             caller = get_checksum_address("0x" + event["topics"][1].hex()[-40:])
             user = get_checksum_address("0x" + event["topics"][2].hex()[-40:])
-            amount, balance_increase, index = eth_abi.decode(
+            amount, balance_increase, index = decode(
                 ["uint256", "uint256", "uint256"], event["data"]
             )
 
@@ -541,7 +541,7 @@ class TransactionOperationsParser:
         try:
             from_addr = get_checksum_address("0x" + event["topics"][1].hex()[-40:])
             target = get_checksum_address("0x" + event["topics"][2].hex()[-40:])
-            amount, balance_increase, index = eth_abi.decode(
+            amount, balance_increase, index = decode(
                 ["uint256", "uint256", "uint256"], event["data"]
             )
 
@@ -584,7 +584,7 @@ class TransactionOperationsParser:
             from_addr = get_checksum_address("0x" + event["topics"][1].hex()[-40:])
             to_addr = get_checksum_address("0x" + event["topics"][2].hex()[-40:])
             # BalanceTransfer data: amount, index
-            amount, index = eth_abi.decode(["uint256", "uint256"], event["data"])
+            amount, index = decode(["uint256", "uint256"], event["data"])
 
             # Determine event type based on token type
             token_address = get_checksum_address(event["address"])
@@ -626,7 +626,7 @@ class TransactionOperationsParser:
             from_addr = get_checksum_address("0x" + event["topics"][1].hex()[-40:])
             to_addr = get_checksum_address("0x" + event["topics"][2].hex()[-40:])
             # Transfer data: amount
-            (amount,) = eth_abi.decode(["uint256"], event["data"])
+            (amount,) = decode(["uint256"], event["data"])
 
             # Determine event type based on token type
             token_address = get_checksum_address(event["address"])
@@ -707,7 +707,7 @@ class TransactionOperationsParser:
         # Decode SUPPLY event
         reserve = self._decode_address(supply_event["topics"][1])
         user = self._decode_address(supply_event["topics"][2])
-        caller, amount = eth_abi.decode(["address", "uint256"], supply_event["data"])
+        caller, amount = decode(["address", "uint256"], supply_event["data"])
 
         # Find collateral mint for this user
         # For SUPPLY: look for mints where value > balance_increase (standard deposit)
@@ -761,7 +761,7 @@ class TransactionOperationsParser:
         # Decode WITHDRAW event
         reserve = self._decode_address(withdraw_event["topics"][1])
         user = self._decode_address(withdraw_event["topics"][2])
-        amount = eth_abi.decode(["uint256"], withdraw_event["data"])[0]
+        amount = decode(["uint256"], withdraw_event["data"])[0]
 
         # Find collateral burn for this user
         collateral_burn = None
@@ -826,7 +826,7 @@ class TransactionOperationsParser:
         # Decode BORROW event
         reserve = self._decode_address(borrow_event["topics"][1])
         on_behalf_of = self._decode_address(borrow_event["topics"][2])
-        caller, amount, interest_rate_mode, borrow_rate = eth_abi.decode(
+        caller, amount, interest_rate_mode, borrow_rate = decode(
             ["address", "uint256", "uint8", "uint256"], borrow_event["data"]
         )
 
@@ -887,7 +887,7 @@ class TransactionOperationsParser:
         # Decode REPAY event
         reserve = self._decode_address(repay_event["topics"][1])
         user = self._decode_address(repay_event["topics"][2])
-        amount, use_a_tokens = eth_abi.decode(["uint256", "bool"], repay_event["data"])
+        amount, use_a_tokens = decode(["uint256", "bool"], repay_event["data"])
 
         is_gho = reserve == GHO_TOKEN_ADDRESS
 
@@ -1019,15 +1019,14 @@ class TransactionOperationsParser:
             elif ev.event_type == "COLLATERAL_TRANSFER":
                 if ev.user_address == user:
                     collateral_transfers.append(ev)
-            elif ev.event_type == "UNKNOWN_TRANSFER":
+            elif ev.event_type == "UNKNOWN_TRANSFER" and ev.user_address == user:
                 # Fallback: when token address isn't in mapping, BalanceTransfer
                 # decodes as UNKNOWN_TRANSFER. Match by user address - if the
                 # transfer is FROM the liquidated user, it's likely collateral.
-                if ev.user_address == user:
-                    collateral_transfers.append(ev)
+                collateral_transfers.append(ev)
 
-        scaled_token_events = []
-        balance_transfer_events = []
+        scaled_token_events: list[ScaledTokenEvent] = []
+        balance_transfer_events: list[LogReceipt] = []
         if debt_burn:
             scaled_token_events.append(debt_burn)
         if collateral_burn:
@@ -1078,14 +1077,14 @@ class TransactionOperationsParser:
         # Check if there's a LIQUIDATION_CALL for the same user in this transaction
         # If so, this DEFICIT_CREATED is part of the liquidation, not a standalone flash loan
         has_liquidation_for_user = False
-        for ev in all_events:
-            if ev["topics"][0] == AaveV3Event.LIQUIDATION_CALL.value:
-                liquidation_user = self._decode_address(ev["topics"][3])
+        for event in all_events:
+            if event["topics"][0] == AaveV3Event.LIQUIDATION_CALL.value:
+                liquidation_user = self._decode_address(event["topics"][3])
                 if liquidation_user == user:
                     has_liquidation_for_user = True
                     break
 
-        scaled_token_events = []
+        scaled_token_events: list[ScaledTokenEvent] = []
         if is_gho_deficit and not has_liquidation_for_user:
             # Find GHO debt burn for GHO flash loans only if not part of liquidation
             for ev in scaled_events:

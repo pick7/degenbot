@@ -2379,14 +2379,14 @@ def _process_transaction_with_operations(
         logger.debug(f"Operation {op.operation_id}: {op.operation_type.name}")
         if op.pool_event:
             logger.debug(f"  Pool event: logIndex={op.pool_event['logIndex']}")
-        for ev in op.scaled_token_events:
+        for scaled_ev in op.scaled_token_events:
             logger.debug(
-                f"  Scaled event: logIndex={ev.event['logIndex']}, type={ev.event_type}, user={ev.user_address}, amount={ev.amount}, index={ev.index}"
+                f"  Scaled event: logIndex={scaled_ev.event['logIndex']}, type={scaled_ev.event_type}, user={scaled_ev.user_address}, amount={scaled_ev.amount}, index={scaled_ev.index}"
             )
-        for ev in op.transfer_events:
-            logger.debug(f"  Transfer event: logIndex={ev['logIndex']}")
-        for ev in op.balance_transfer_events:
-            logger.debug(f"  BalanceTransfer event: logIndex={ev['logIndex']}")
+        for transfer_ev in op.transfer_events:
+            logger.debug(f"  Transfer event: logIndex={transfer_ev['logIndex']}")
+        for balance_transfer_ev in op.balance_transfer_events:
+            logger.debug(f"  BalanceTransfer event: logIndex={balance_transfer_ev['logIndex']}")
     logger.debug("=== END OPERATIONS ===\n")
 
     # Process each operation
@@ -2402,11 +2402,15 @@ def _process_transaction_with_operations(
 
     # Process non-operation events (e.g., DiscountPercentUpdated, DiscountTokenUpdated)
     # These events are not part of parsed operations but still need to be handled
-    assigned_log_indices = set()
+    assigned_log_indices: set[int] = set()
     for op in tx_operations.operations:
-        assigned_log_indices.update(ev.event["logIndex"] for ev in op.scaled_token_events)
-        assigned_log_indices.update(ev["logIndex"] for ev in op.transfer_events)
-        assigned_log_indices.update(ev["logIndex"] for ev in op.balance_transfer_events)
+        assigned_log_indices.update(
+            scaled_ev.event["logIndex"] for scaled_ev in op.scaled_token_events
+        )
+        assigned_log_indices.update(transfer_ev["logIndex"] for transfer_ev in op.transfer_events)
+        assigned_log_indices.update(
+            balance_transfer_ev["logIndex"] for balance_transfer_ev in op.balance_transfer_events
+        )
         if op.pool_event:
             assigned_log_indices.add(op.pool_event["logIndex"])
 
@@ -2531,7 +2535,7 @@ def _process_operation(
             )
 
         # Mark pool event as consumed if needed
-        if match_result["should_consume"]:
+        if match_result["should_consume"] and match_result["pool_event"] is not None:
             tx_context.matched_pool_events[match_result["pool_event"]["logIndex"]] = True
 
 
@@ -4107,7 +4111,11 @@ def _process_gho_debt_mint_event(
 
         # For BORROW operations, calculate scaled_amount from the borrow amount
         # This matches the Pool's calculation: amount.getVTokenMintScaledAmount(index)
-        if result is not None and result["pool_event"]["topics"][0] == AaveV3Event.BORROW.value:
+        if (
+            result is not None
+            and result["pool_event"] is not None
+            and result["pool_event"]["topics"][0] == AaveV3Event.BORROW.value
+        ):
             borrow_amount = result["extraction_data"]["raw_amount"]
             pool_processor = PoolProcessorFactory.get_pool_processor_for_token_revision(
                 debt_asset.v_token_revision
@@ -4302,7 +4310,7 @@ def _process_standard_debt_mint_event(
         )
 
         # DEBUG: Log matching result
-        if result is not None:
+        if result is not None and result["pool_event"] is not None:
             matched_topic = result["pool_event"]["topics"][0].hex()[:10]
             logger.debug(
                 f"EventMatcher returned result: "
@@ -4316,7 +4324,11 @@ def _process_standard_debt_mint_event(
         # This matches the Pool's calculation: amount.getVTokenMintScaledAmount(index)
         # If no pool event found (e.g., interest accrual patterns), scaled_amount remains None
         # and the processor will calculate it from event data
-        if result is not None and result["pool_event"]["topics"][0] == AaveV3Event.BORROW.value:
+        if (
+            result is not None
+            and result["pool_event"] is not None
+            and result["pool_event"]["topics"][0] == AaveV3Event.BORROW.value
+        ):
             borrow_amount = result["extraction_data"]["raw_amount"]
             pool_processor = PoolProcessorFactory.get_pool_processor_for_token_revision(
                 debt_asset.v_token_revision
@@ -4543,7 +4555,7 @@ def _process_collateral_burn_event(
     # Extract scaled_amount based on matched pool event type
     scaled_amount: int | None = None
 
-    if result is None:
+    if result is None or result["pool_event"] is None:
         # Edge case: collateral burn without matching Pool event
         # This can occur in protocol upgrades, direct aToken burns, or other
         # edge cases where the collateral is burned without going through
@@ -4783,7 +4795,7 @@ def _process_standard_debt_burn_event(
         reserve_address=reserve_address,
     )
 
-    if result is None:
+    if result is None or result["pool_event"] is None:
         # Edge case: debt burn without matching Pool event
         # This can occur in flash loan liquidations, protocol upgrades, or bad debt forgiveness
         # where the debt token is burned directly without going through Pool.repay()
