@@ -1,4 +1,5 @@
 import os
+import sys
 from dataclasses import dataclass, field
 from enum import Enum
 from operator import itemgetter
@@ -121,17 +122,29 @@ Phase 2: _process_transaction_with_operations() implemented - COMPLETE
   - Validates all operations upfront
   - Uses OperationAwareEventMatcher for pattern-aware matching
 
-Phase 3: Migrate individual event processors (IN PROGRESS)
+Phase 3: Transaction Context Event Categorization - COMPLETE (2026-02-25)
+  - Fixed bug where debt mint events were misclassified as collateral mints
+  - Added debt_mints and debt_burns lists to TransactionContext
+  - Added _get_debt_token_addresses() helper function
+  - Updated categorization logic to properly distinguish vTokens from aTokens
+  - See debug/aave/0042 for details
+
+Phase 4: Migrate individual event processors (IN PROGRESS)
   - Each event processor needs to support operation-based context
   - Gradual migration of _process_collateral_mint_event, etc.
 
-Phase 4: Remove legacy code
+Phase 5: Remove legacy code
   - Once all processors migrated and tested
   - Remove USE_OPERATION_BASED_PROCESSING flag
   - Remove legacy event-by-event processing
 
+KNOWN ISSUES:
+  - Debt mint balance calculation still has discrepancies in multi-mint transactions
+  - See debug/aave/0042 for investigation details
+
 See: src/degenbot/cli/aave_transaction_operations.py
 See: tests/cli/test_aave_transaction_operations.py
+See: debug/aave/0042 - wstETH Debt Mint Events Misclassified as Collateral Mints.md
 """
 
 
@@ -3885,6 +3898,16 @@ def _process_collateral_mint_event(
     """
     reserve_address = get_checksum_address(collateral_asset.underlying_token.address)
 
+    # DEBUG: Log entry into collateral mint handler
+    logger.debug(
+        f"[BUG42-DEBUG] _process_collateral_mint_event called: "
+        f"user={user.address}, token={token_address}, reserve={reserve_address}, "
+        f"event_amount={event_amount}, balance_increase={balance_increase}, "
+        f"caller={caller_address}, logIndex={event['logIndex']}",
+        file=sys.stderr,
+        flush=True,
+    )
+
     # Track matched pool event and calculated scaled delta
     matched_pool_event: LogReceipt | None = None
     extraction_data: dict[str, int] = {}
@@ -4233,6 +4256,16 @@ def _process_standard_debt_mint_event(
 
     scaled_amount: int | None = None
 
+    # DEBUG: Log entry into debt mint handler
+    logger.debug(
+        f"[BUG42-DEBUG] _process_standard_debt_mint_event called: "
+        f"user={user.address}, token={token_address}, reserve={reserve_address}, "
+        f"event_amount={event_amount}, balance_increase={balance_increase}, "
+        f"logIndex={event['logIndex']}",
+        file=sys.stderr,
+        flush=True,
+    )
+
     # Skip verification for pure interest accrual (value == balanceIncrease)
     # These mints don't have a corresponding Pool event
     if event_amount != balance_increase:
@@ -4246,8 +4279,21 @@ def _process_standard_debt_mint_event(
             user_address=user.address,
             reserve_address=reserve_address,
             check_users=[caller_address],  # For adapter pattern (onBehalfOf=adapter)
-            max_log_index=event["logIndex"],
+            # Don't restrict by max_log_index - BORROW events can appear after Mint events
+            # in complex transactions with multiple operations
+            max_log_index=None,
         )
+
+        # DEBUG: Log matching result
+        if result is not None:
+            matched_topic = result["pool_event"]["topics"][0].hex()[:10]
+            logger.debug(
+                f"[BUG42-DEBUG] EventMatcher returned result: "
+                f"matched_topic={matched_topic}, should_consume={result['should_consume']}, "
+                f"extraction_data={result['extraction_data']}"
+            )
+        else:
+            logger.debug(f"[BUG42-DEBUG] EventMatcher returned None - no matching pool event found")
 
         # For BORROW operations, calculate scaled_amount from the borrow amount
         # This matches the Pool's calculation: amount.getVTokenMintScaledAmount(index)
@@ -4262,6 +4308,16 @@ def _process_standard_debt_mint_event(
                 amount=borrow_amount,
                 borrow_index=index,
             )
+            logger.debug(
+                f"[BUG42-DEBUG] Calculated scaled_amount for BORROW: "
+                f"borrow_amount={borrow_amount}, scaled_amount={scaled_amount}, "
+                f"index={index}"
+            )
+    else:
+        logger.debug(
+            f"[BUG42-DEBUG] Skipping EventMatcher - pure interest accrual "
+            f"(event_amount={event_amount} == balance_increase={balance_increase})"
+        )
 
     debt_position = _get_or_create_debt_position(session=session, user=user, asset_id=debt_asset.id)
 
@@ -4278,6 +4334,15 @@ def _process_standard_debt_mint_event(
         ),
         scaled_token_revision=debt_asset.v_token_revision,
         position=debt_position,
+    )
+
+    # DEBUG: Log the balance change
+    balance_delta = debt_position.balance - user_starting_amount
+    logger.debug(
+        f"[BUG42-DEBUG] Debt mint processed: "
+        f"user={user.address}, token={token_address}, "
+        f"starting_balance={user_starting_amount}, ending_balance={debt_position.balance}, "
+        f"delta={balance_delta}, scaled_amount_used={scaled_amount}"
     )
 
     if VerboseConfig.is_verbose(

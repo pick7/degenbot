@@ -327,6 +327,14 @@ class EventMatcher:
             True if the event matches, False otherwise
         """
         event_topic = pool_event["topics"][0]
+        event_log_index = pool_event["logIndex"]
+
+        # DEBUG: Log matching attempt
+        logger.debug(
+            f"[BUG42-DEBUG] _matches_pool_event: checking event at logIndex {event_log_index} "
+            f"(topic={event_topic.hex()[:10]}) against expected_type={expected_type.name}, "
+            f"user={user_address}, reserve={reserve_address}"
+        )
 
         # Allow LIQUIDATION_CALL when expecting REPAY or WITHDRAW
         # Allow DEFICIT_CREATED when expecting REPAY (bad debt write-off)
@@ -341,6 +349,9 @@ class EventMatcher:
                 and expected_type == AaveV3Event.REPAY
             )
         ):
+            logger.debug(
+                f"[BUG42-DEBUG]   -> NO MATCH: event topic {event_topic.hex()[:10]} != expected {expected_type.value.hex()[:10]}"
+            )
             return False
 
         if expected_type == AaveV3Event.BORROW:
@@ -351,28 +362,49 @@ class EventMatcher:
                 types=["address", "uint256", "uint8", "uint256"],
                 data=pool_event["data"],
             )
-            return (
+            matches = (
                 event_on_behalf_of == user_address
                 and event_reserve == reserve_address
                 and interest_rate_mode == 2  # Variable rate
             )
+            logger.debug(
+                f"[BUG42-DEBUG]   -> BORROW check: event_reserve={event_reserve}, "
+                f"event_on_behalf_of={event_on_behalf_of}, interest_rate_mode={interest_rate_mode}, "
+                f"matches={matches}"
+            )
+            return matches
 
         if expected_type == AaveV3Event.REPAY:
             if event_topic == AaveV3Event.REPAY.value:
                 # REPAY: topics[1]=reserve, topics[2]=user
                 event_reserve = _decode_address(pool_event["topics"][1])
                 event_user = _decode_address(pool_event["topics"][2])
-                return event_user == user_address and event_reserve == reserve_address
+                matches = event_user == user_address and event_reserve == reserve_address
+                logger.debug(
+                    f"[BUG42-DEBUG]   -> REPAY check: event_user={event_user}, event_reserve={event_reserve}, "
+                    f"matches={matches}"
+                )
+                return matches
             if event_topic == AaveV3Event.LIQUIDATION_CALL.value:
                 # Liquidation matching - match on debtAsset
                 event_debt_asset = _decode_address(pool_event["topics"][2])
                 event_user = _decode_address(pool_event["topics"][3])
-                return event_user == user_address and event_debt_asset == reserve_address
+                matches = event_user == user_address and event_debt_asset == reserve_address
+                logger.debug(
+                    f"[BUG42-DEBUG]   -> LIQUIDATION_CALL(as REPAY) check: event_user={event_user}, "
+                    f"event_debt_asset={event_debt_asset}, matches={matches}"
+                )
+                return matches
             if event_topic == AaveV3Event.DEFICIT_CREATED.value:
                 # DeficitCreated matching - debt written off
                 event_user = _decode_address(pool_event["topics"][1])
                 event_reserve = _decode_address(pool_event["topics"][2])
-                return event_user == user_address and event_reserve == reserve_address
+                matches = event_user == user_address and event_reserve == reserve_address
+                logger.debug(
+                    f"[BUG42-DEBUG]   -> DEFICIT_CREATED(as REPAY) check: event_user={event_user}, "
+                    f"event_reserve={event_reserve}, matches={matches}"
+                )
+                return matches
 
         elif expected_type == AaveV3Event.SUPPLY:
             # SUPPLY: topics[1]=reserve, topics[2]=onBehalfOf, topics[3]=referralCode
@@ -382,19 +414,34 @@ class EventMatcher:
             # topics[3] is referralCode (uint16), NOT an address - do not decode as address!
             event_reserve = _decode_address(pool_event["topics"][1])
             event_on_behalf_of = _decode_address(pool_event["topics"][2])
-            return event_on_behalf_of == user_address and event_reserve == reserve_address
+            matches = event_on_behalf_of == user_address and event_reserve == reserve_address
+            logger.debug(
+                f"[BUG42-DEBUG]   -> SUPPLY check: event_reserve={event_reserve}, "
+                f"event_on_behalf_of={event_on_behalf_of}, matches={matches}"
+            )
+            return matches
 
         elif expected_type == AaveV3Event.WITHDRAW:
             if event_topic == AaveV3Event.WITHDRAW.value:
                 # WITHDRAW: topics[1]=reserve, topics[2]=user
                 event_reserve = _decode_address(pool_event["topics"][1])
                 event_user = _decode_address(pool_event["topics"][2])
-                return event_user == user_address and event_reserve == reserve_address
+                matches = event_user == user_address and event_reserve == reserve_address
+                logger.debug(
+                    f"[BUG42-DEBUG]   -> WITHDRAW check: event_user={event_user}, event_reserve={event_reserve}, "
+                    f"matches={matches}"
+                )
+                return matches
             if event_topic == AaveV3Event.LIQUIDATION_CALL.value:
                 # Liquidation matching - match on collateralAsset
                 event_collateral_asset = _decode_address(pool_event["topics"][1])
                 event_user = _decode_address(pool_event["topics"][3])
-                return event_user == user_address and event_collateral_asset == reserve_address
+                matches = event_user == user_address and event_collateral_asset == reserve_address
+                logger.debug(
+                    f"[BUG42-DEBUG]   -> LIQUIDATION_CALL(as WITHDRAW) check: event_user={event_user}, "
+                    f"event_collateral_asset={event_collateral_asset}, matches={matches}"
+                )
+                return matches
 
         elif expected_type == AaveV3Event.LIQUIDATION_CALL:
             # LIQUIDATION_CALL: topics[1]=collateralAsset, topics[2]=debtAsset, topics[3]=user
@@ -402,15 +449,27 @@ class EventMatcher:
             event_debt_asset = _decode_address(pool_event["topics"][2])
             event_user = _decode_address(pool_event["topics"][3])
             if event_user == user_address:
-                return reserve_address in {event_debt_asset, event_collateral_asset}
+                matches = reserve_address in {event_debt_asset, event_collateral_asset}
+                logger.debug(
+                    f"[BUG42-DEBUG]   -> LIQUIDATION_CALL check: event_user={event_user}, "
+                    f"event_collateral_asset={event_collateral_asset}, event_debt_asset={event_debt_asset}, "
+                    f"matches={matches}"
+                )
+                return matches
 
         elif expected_type == AaveV3Event.DEFICIT_CREATED:
             # DEFICIT_CREATED: topics[1]=user, topics[2]=asset, data=(uint256 amountCreated)
             # Used for GHO liquidations and bad debt write-offs
             event_user = _decode_address(pool_event["topics"][1])
             event_asset = _decode_address(pool_event["topics"][2])
-            return event_user == user_address and event_asset == reserve_address
+            matches = event_user == user_address and event_asset == reserve_address
+            logger.debug(
+                f"[BUG42-DEBUG]   -> DEFICIT_CREATED check: event_user={event_user}, "
+                f"event_asset={event_asset}, matches={matches}"
+            )
+            return matches
 
+        logger.debug(f"[BUG42-DEBUG]   -> NO MATCH: unexpected expected_type={expected_type.name}")
         return False
 
     def find_matching_pool_event(
@@ -452,6 +511,13 @@ class EventMatcher:
                 reserve_address=reserve_address,
             )
 
+        # DEBUG: Log entry into event matching
+        logger.debug(
+            f"[BUG42-DEBUG] EventMatcher.find_matching_pool_event called: "
+            f"event_type={event_type.name}, user={user_address}, reserve={reserve_address}, "
+            f"max_log_index={max_log_index}"
+        )
+
         # Build list of user addresses to check
         users_to_check = [user_address]
         if check_users:
@@ -459,25 +525,36 @@ class EventMatcher:
 
         # Try each pool event type in order
         for expected_type in config.pool_event_types:
+            logger.debug(
+                f"[BUG42-DEBUG] Trying pool event type: {expected_type.name} "
+                f"(looking for {event_type.name})"
+            )
             for user in users_to_check:
                 # Use index for O(1) lookup if available, otherwise iterate
                 event_index = self._build_event_index()
                 events_of_type = event_index.get(expected_type.value, [])
 
-                for pool_event in events_of_type:
-                    # Skip events that occur after the scaled token event
-                    if max_log_index is not None and pool_event["logIndex"] > max_log_index:
-                        continue
+                logger.debug(
+                    f"[BUG42-DEBUG] Found {len(events_of_type)} events of type {expected_type.name} "
+                    f"for user {user}"
+                )
 
-                    if self._is_consumed(pool_event):
+                for pool_event in events_of_type:
+                    event_log_index = pool_event["logIndex"]
+                    event_topic = pool_event["topics"][0].hex()[:10]
+
+                    # Skip events that occur after the scaled token event
+                    if max_log_index is not None and event_log_index > max_log_index:
                         logger.debug(
-                            f"Skipping consumed event at logIndex {pool_event['logIndex']}"
+                            f"[BUG42-DEBUG] Skipping event at logIndex {event_log_index} "
+                            f"(topic={event_topic}) - after max_log_index {max_log_index}"
                         )
                         continue
 
                     if self._is_consumed(pool_event):
-                        logger.warning(
-                            f"DEBUG: Skipping - event already consumed at logIndex {pool_event['logIndex']}"
+                        logger.debug(
+                            f"[BUG42-DEBUG] Skipping consumed event at logIndex {event_log_index} "
+                            f"(topic={event_topic})"
                         )
                         continue
 
@@ -486,24 +563,31 @@ class EventMatcher:
                     )
                     if matches:
                         logger.debug(
-                            f"Matched {expected_type.name} event at logIndex {pool_event['logIndex']} "
-                            f"for user {user}"
+                            f"[BUG42-DEBUG] ✓ MATCHED {expected_type.name} event at logIndex {event_log_index} "
+                            f"for user {user} (reserve: {reserve_address})"
                         )
                         should_consume = self._should_consume(pool_event, config)
+                        logger.debug(f"[BUG42-DEBUG] Consumption: should_consume={should_consume}")
                         if should_consume:
                             self._mark_consumed(pool_event)
 
                         extraction_data = self._extract_event_data(pool_event, event_type)
+                        logger.debug(f"[BUG42-DEBUG] Extracted data: {extraction_data}")
 
                         return EventMatchResult(
                             pool_event=pool_event,
                             should_consume=should_consume,
                             extraction_data=extraction_data,
                         )
+                    else:
+                        logger.debug(
+                            f"[BUG42-DEBUG] ✗ NO MATCH for {expected_type.name} event at logIndex {event_log_index} "
+                            f"(topic={event_topic}, user={user}, reserve={reserve_address})"
+                        )
 
         # No match found
         logger.debug(
-            f"No matching event found for {event_type.name}. "
+            f"[BUG42-DEBUG] NO MATCH FOUND for {event_type.name}. "
             f"Tried users: {users_to_check}, reserve: {reserve_address}. "
             f"Available pool events: {len(self.tx_context.pool_events)}"
         )

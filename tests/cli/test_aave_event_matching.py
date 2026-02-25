@@ -1481,3 +1481,160 @@ class TestGHODebtBurnEventOrdering:
         assert result is not None
         assert result["pool_event"] == gho_repay
         assert result["pool_event"]["logIndex"] == 184
+
+
+class TestDebtMintMaxLogIndex:
+    """Test debt mint matching without max_log_index constraint.
+
+    See debug/aave/0043 for the bug report.
+
+    In complex transactions with multiple operations, BORROW events can appear
+    after their corresponding VariableDebtToken Mint events. The max_log_index
+    constraint was incorrectly filtering out valid BORROW events.
+    """
+
+    def create_mock_tx_context(self, pool_events: list[LogReceipt]) -> MagicMock:
+        """Create a mock TransactionContext with pool events."""
+        tx_context = MagicMock()
+        tx_context.pool_events = pool_events
+        tx_context.matched_pool_events = {}
+        return tx_context
+
+    def create_borrow_event(
+        self, reserve: ChecksumAddress, user: ChecksumAddress, log_index: int, amount: int = 42_000
+    ) -> LogReceipt:
+        """Create a BORROW event.
+
+        BORROW event structure:
+        - topics[0]: BORROW event signature
+        - topics[1]: reserve (indexed)
+        - topics[2]: onBehalfOf (indexed)
+        - data: (address caller, uint256 amount, uint8 interestRateMode, uint256 borrowRate)
+        """
+        return cast(
+            "LogReceipt",
+            {
+                "topics": [
+                    AaveV3Event.BORROW.value,
+                    HexBytes(f"0x000000000000000000000000{reserve[2:]}"),  # reserve
+                    HexBytes(f"0x000000000000000000000000{user[2:]}"),  # onBehalfOf
+                ],
+                "logIndex": log_index,
+                "data": HexBytes(
+                    "0x0000000000000000000000000000000000000000000000000000000000000000"  # caller
+                    + hex(amount)[2:].zfill(64)  # amount
+                    + "0000000000000000000000000000000000000000000000000000000000000002"  # interestRateMode=Variable
+                    + "0000000000000000000000000000000000000000000000000000000000000000"  # borrowRate
+                ),
+            },
+        )
+
+    def test_debt_mint_matches_borrow_with_higher_log_index(self):
+        """Debt mint should match BORROW even when BORROW appears after Mint.
+
+        Transaction pattern from debug/aave/0043 (0x406c6bff...):
+        - Complex transaction with 5 separate borrow operations
+        - BORROW event can appear AFTER the VariableDebtToken Mint event
+        - The max_log_index constraint was preventing valid matches
+        """
+        user_address = _decode_address(
+            HexBytes("0x000000000000000000000000310a2c115d3d45a89b59640fff859be0f54a08e2")
+        )
+        wsteth_reserve = _decode_address(
+            HexBytes("0x0000000000000000000000007f39c581f595b53c5cb19bd0b3f8da6c935e2ca0")
+        )
+
+        # BORROW event at logIndex 380 (AFTER the mint event at 376)
+        borrow_event = self.create_borrow_event(wsteth_reserve, user_address, 380)
+
+        tx_context = self.create_mock_tx_context(cast("list[LogReceipt]", [borrow_event]))
+        matcher = EventMatcher(tx_context)
+
+        # Simulate debt mint at logIndex 376
+        # Should still match the BORROW event at 380
+        result = matcher.find_matching_pool_event(
+            event_type=ScaledTokenEventType.DEBT_MINT,
+            user_address=user_address,
+            reserve_address=wsteth_reserve,
+            max_log_index=None,  # Key fix: don't restrict by log index
+        )
+
+        assert result is not None, "Debt mint should match BORROW even with higher logIndex"
+        assert result["pool_event"] == borrow_event
+        assert result["should_consume"] is True, "BORROW should be consumed"
+        assert 380 in tx_context.matched_pool_events, "BORROW event should be marked as consumed"
+        assert result["extraction_data"]["raw_amount"] == 42_000
+
+    def test_debt_mint_matches_borrow_with_lower_log_index(self):
+        """Debt mint should still match BORROW when BORROW has lower logIndex.
+
+        This is the standard case - ensure we didn't break normal operation.
+        """
+        user_address = _decode_address(
+            HexBytes("0x000000000000000000000000310a2c115d3d45a89b59640fff859be0f54a08e2")
+        )
+        wsteth_reserve = _decode_address(
+            HexBytes("0x0000000000000000000000007f39c581f595b53c5cb19bd0b3f8da6c935e2ca0")
+        )
+
+        # BORROW event at logIndex 370 (BEFORE the mint event)
+        borrow_event = self.create_borrow_event(wsteth_reserve, user_address, 370)
+
+        tx_context = self.create_mock_tx_context(cast("list[LogReceipt]", [borrow_event]))
+        matcher = EventMatcher(tx_context)
+
+        result = matcher.find_matching_pool_event(
+            event_type=ScaledTokenEventType.DEBT_MINT,
+            user_address=user_address,
+            reserve_address=wsteth_reserve,
+            max_log_index=None,
+        )
+
+        assert result is not None, "Debt mint should match BORROW event"
+        assert result["pool_event"] == borrow_event
+        assert result["should_consume"] is True
+
+    def test_debt_mint_multiple_borrows_correct_consumption(self):
+        """Multiple debt mints should match their respective BORROW events.
+
+        Tests the scenario from debug/aave/0043 where 5 borrows occurred:
+        - Each BORROW should be matched exactly once
+        - Consumption tracking should prevent double-matching
+        """
+        user_address = _decode_address(
+            HexBytes("0x000000000000000000000000310a2c115d3d45a89b59640fff859be0f54a08e2")
+        )
+        wsteth_reserve = _decode_address(
+            HexBytes("0x0000000000000000000000007f39c581f595b53c5cb19bd0b3f8da6c935e2ca0")
+        )
+
+        # Create 5 BORROW events (simulating the transaction from debug/aave/0043)
+        borrow_events = [
+            self.create_borrow_event(wsteth_reserve, user_address, 360, 42_000),
+            self.create_borrow_event(wsteth_reserve, user_address, 370, 92_000),
+            self.create_borrow_event(wsteth_reserve, user_address, 380, 84_505),
+            self.create_borrow_event(wsteth_reserve, user_address, 390, 76_010),
+            self.create_borrow_event(wsteth_reserve, user_address, 400, 68_434),
+        ]
+
+        tx_context = self.create_mock_tx_context(cast("list[LogReceipt]", borrow_events))
+        matcher = EventMatcher(tx_context)
+
+        # Match all 5 borrows
+        matched_amounts = []
+        for _ in range(5):
+            result = matcher.find_matching_pool_event(
+                event_type=ScaledTokenEventType.DEBT_MINT,
+                user_address=user_address,
+                reserve_address=wsteth_reserve,
+                max_log_index=None,
+            )
+            assert result is not None, "Each debt mint should find a BORROW"
+            matched_amounts.append(result["extraction_data"]["raw_amount"])
+
+        # Verify all borrows were matched
+        assert sorted(matched_amounts) == [42_000, 68_434, 76_010, 84_505, 92_000]
+
+        # Verify all events are consumed
+        for event in borrow_events:
+            assert event["logIndex"] in tx_context.matched_pool_events
