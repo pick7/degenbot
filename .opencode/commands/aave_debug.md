@@ -19,7 +19,9 @@ Execute `uv run degenbot aave update` with the option `--debug-output=./.opencod
 ### 3. Validate & Fix
 - Determine the root cause, e.g., a processing function failed to determine the correct value from an event, the database had a stale value, a previous processing action set a value incorrectly which was used by another processing action
 - Design the fix to resolve the bug. If a unique transaction requires adding sophistication to transaction matching and event validation, fix that. Do not accumulate hacks and special cases within general processors
-- Apply the fix to resolve the bug, refactor and clean up code involved with this failure, then run the update command again to confirm the fix was successful
+- Apply the fix to resolve the bug
+- Run a final update command to confirm the fix was successful
+- Run the existing test suite to confirm it does not break any existing matching logic
 
 ### 4. Document Findings
 Create a new report in @debug/aave. Follow this format:
@@ -35,6 +37,7 @@ Create a new report in @debug/aave. Follow this format:
 
 ### 5. Write Tests
 - Use the investigation report and transaction details to write a stateless unit test to verify that the math operations, user operation determination, event matching logic, etc., match the expectations.
+- Confirm the test suite passes
 
 ### 6. Clean Up
 - Remove unneeded files in @.opencode/tmp
