@@ -84,11 +84,30 @@ The cast command provides many subcommands organized by purpose:
 | **ENS** | Resolve names and addresses | [references/ENS.md](references/ENS.md) |
 | **Utilities** | Various helper functions | [references/UTILITIES.md](references/UTILITIES.md) |
 
+## RPC URL Configuration
+
+When a `cast` subcommand requires an RPC URL (e.g., for blockchain queries or contract interactions), determine the appropriate URL as follows:
+
+**Lookup the RPC URL in the config file:**
+- File location: `.opencode/rpc-config.json`
+- This JSON file maps chain names and IDs to their RPC endpoints
+
+**Example config structure:**
+```json
+{
+    "ethereum": "http://127.0.0.1:8545",
+    "mainnet": "http://127.0.0.1:8545",
+    "1": "http://127.0.0.1:8545"
+}
+```
+
+**Usage:** Match the chain identifier (name or chain ID) to the corresponding RPC URL in the config file, then pass it to commands using `--rpc-url <url>`.
+
 ## Global Options
 
 Most commands accept these common options:
 
-- `--rpc-url <url>` - RPC endpoint URL
+- `--rpc-url <url>` - RPC endpoint URL (see RPC URL Configuration above)
 - `--chain <name_or_id>` - Chain name (ethereum, polygon) or EIP-155 chain ID
 - `--block <number>` - Block height to query at
 
