@@ -18,4 +18,4 @@ Prepare an investigation report with detailed information about the transaction,
 - **Addresses**: All accounts and contracts involved with the transaction
 - **Asset Flow**: An accounting of all asset flow between addresses
 
-Save the report, transaction details, and investigation notes to `.opencode/tmp/`
+Save the report, transaction details, and investigation notes to `/tmp/`

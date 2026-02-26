@@ -4,7 +4,7 @@ agent: build
 ---
 
 ## DIRECTION: 
-Execute `uv run degenbot aave update` with the option `--debug-output=./.opencode/tmp/{FILE}`, specifying a new log filename. 
+Execute `uv run degenbot aave update` with the option `--debug-output=/tmp/{FILE}`, specifying a new log filename. 
 
 Discover and fix the bug that lead to the failure.
 
@@ -13,7 +13,7 @@ Discover and fix the bug that lead to the failure.
 - Grep the log for "exception" to identify the failure. Grep for related events, processes, and state logs leading up to the failure
 
 ### Investigate Transaction
-- @evm-investigator Perform a thorough investigation of the transaction; use all known information about the blocks, transactions, and operations leading to the invalid state; Determine the implementation address **at the time of the transaction** for any proxy contract involved, e.g., AToken, VariableDebtToken, GHOVariableDebtToken, Pool, stkAAVE; review the specific revision of the Aave smart contract source code stored in `contract_reference/aave`; compile a detailed report in `.opencode/tmp` showing the smart contract control flow, events, account updates, and asset flow
+- @evm-investigator Perform a thorough investigation of the transaction; use all known information about the blocks, transactions, and operations leading to the invalid state; Determine the implementation address **at the time of the transaction** for any proxy contract involved, e.g., AToken, VariableDebtToken, GHOVariableDebtToken, Pool, stkAAVE; review the specific revision of the Aave smart contract source code stored in `contract_reference/aave`; compile a detailed report in `/tmp` showing the smart contract control flow, events, account updates, and asset flow
 
 ### Investigate Code
 - Determine the execution path and processing logic used that lead to the failure
@@ -46,4 +46,3 @@ Create a new report in `debug/aave` following this format:
 
 ### Clean Up
 - Convert print statements used to diagnose the problem to a generalized `logging.debug()` call
-- Remove unneeded files in `.opencode/tmp`
