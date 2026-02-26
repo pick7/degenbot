@@ -4,12 +4,12 @@ agent: build
 ---
 
 ## DIRECTION: 
-Execute `uv run degenbot aave update` with the option `--debug-output=./.opencode/tmp/{FILE}.log`, specifying a new log filename
+Execute `uv run degenbot aave update` with the option `--debug-output=./.opencode/tmp/{FILE}`, specifying a new log filename
 
 ## PROCESS:
 ### 1. Gather Information
 - Grep the log for "exception" to identify the failure. Grep for relevant events, processes, and state logs leading up to the failure
-- @evm-investigator Perform a thorough investigation of the transaction; use all known information about the blocks, transactions, and operations leading to the invalid state; Determine the implementation address and associated revision for proxy contracts involved in the transaction, e.g., AToken, VariableDebtToken, GHOVariableDebtToken, Pool, stkAAVE; use contract source code in @contract_reference/aave if available
+- @evm-investigator Perform a thorough investigation of the transaction; use all known information about the blocks, transactions, and operations leading to the invalid state; Determine the implementation address **at the time of the transaction** for any proxy contract involved, e.g., AToken, VariableDebtToken, GHOVariableDebtToken, Pool, stkAAVE
 
 ### 2. Investigate Code
 - Determine the execution path leading to the error
