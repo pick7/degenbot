@@ -164,11 +164,27 @@ class Operation:
     def get_all_events(self) -> list[LogReceipt]:
         """Get all events involved in this operation."""
         events = []
+        seen_log_indices: set[int] = set()
+
         if self.pool_event:
             events.append(self.pool_event)
-        events.extend([e.event for e in self.scaled_token_events])
-        events.extend(self.transfer_events)
-        events.extend(self.balance_transfer_events)
+            seen_log_indices.add(self.pool_event["logIndex"])
+
+        for ev in self.scaled_token_events:
+            if ev.event["logIndex"] not in seen_log_indices:
+                events.append(ev.event)
+                seen_log_indices.add(ev.event["logIndex"])
+
+        for ev in self.transfer_events:
+            if ev["logIndex"] not in seen_log_indices:
+                events.append(ev)
+                seen_log_indices.add(ev["logIndex"])
+
+        for ev in self.balance_transfer_events:
+            if ev["logIndex"] not in seen_log_indices:
+                events.append(ev)
+                seen_log_indices.add(ev["logIndex"])
+
         return events
 
     def get_event_log_indices(self) -> list[int]:
@@ -1037,6 +1053,10 @@ class TransactionOperationsParser:
             # are collateral events that should be validated together
             for transfer in collateral_transfers:
                 scaled_token_events.append(transfer)
+                # Track BalanceTransfer events separately so ERC20 Transfers can use
+                # them for proper scaling during processing
+                if transfer.index > 0:
+                    balance_transfer_events.append(transfer.event)
 
         op_type = OperationType.GHO_LIQUIDATION if is_gho else OperationType.LIQUIDATION
 

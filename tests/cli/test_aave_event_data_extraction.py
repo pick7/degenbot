@@ -72,33 +72,34 @@ def create_test_operation(
 class TestSupplyDataExtraction:
     """Test SUPPLY event data extraction."""
 
-    def test_extract_supply_amount_skips_address(self):
-        """SUPPLY event: data=(address caller, uint256 amount, uint16 referralCode)
+    def test_extract_supply_amount(self):
+        """SUPPLY event: data=(address user, uint256 amount)
 
-                The first 32 bytes is the caller address, which must be skipped
-        to get the amount.
+        The SUPPLY event has:
+        - Indexed: reserve (topics[1]), onBehalfOf (topics[2]), referralCode (topics[3])
+        - Data: user address, amount
         """
-        # SUPPLY event: Supply(address,address,address,uint256,uint16)
-        # topics: [event_sig, reserve, user, onBehalfOf]
-        # data: (address caller, uint256 amount, uint16 referralCode)
+        # SUPPLY event: Supply(address indexed reserve, address user, address indexed onBehalfOf, uint256 amount, uint16 indexed referralCode)
+        # topics: [event_sig, reserve, onBehalfOf, referralCode]
+        # data: (address user, uint256 amount)
         supply_topic = HexBytes(
             "0x2b627736bca15cd5381dcf80b0bf11fd197d01a037c52b927a881a10fb73ba61"
         )
 
-        # Encode data: address caller, uint256 amount, uint16 referralCode
+        # Encode data: address user, uint256 amount
         amount = 10**18  # 1 DAI
         data = encode(
-            ["address", "uint256", "uint16"],
-            [TEST_CALLER, amount, 0],  # referralCode = 0
+            ["address", "uint256"],
+            [TEST_CALLER, amount],
         )
 
         pool_event = create_pool_event(
             event_topic=supply_topic,
             topics=[
                 supply_topic,
-                HexBytes("0x" + "00" * 24 + TEST_RESERVE[2:]),
-                HexBytes("0x" + "00" * 24 + TEST_USER[2:]),
-                HexBytes("0x" + "00" * 24 + TEST_ONBEHALF[2:]),
+                HexBytes("0x" + "00" * 24 + TEST_RESERVE[2:]),  # reserve
+                HexBytes("0x" + "00" * 24 + TEST_ONBEHALF[2:]),  # onBehalfOf
+                HexBytes("0x" + "00" * 30 + "0000"),  # referralCode = 0 (uint16)
             ],
             data=data,
         )
@@ -112,8 +113,7 @@ class TestSupplyDataExtraction:
         result = matcher._extract_supply_data()
 
         assert result["raw_amount"] == amount, (
-            f"Expected amount {amount}, got {result['raw_amount']}. "
-            f"If we decoded from byte 0, we'd get {int(TEST_CALLER, 16)}"
+            f"Expected amount {amount}, got {result['raw_amount']}"
         )
 
     def test_extract_supply_with_zero_amount(self):
@@ -123,8 +123,8 @@ class TestSupplyDataExtraction:
         )
 
         data = encode(
-            ["address", "uint256", "uint16"],
-            [TEST_CALLER, 0, 0],
+            ["address", "uint256"],
+            [TEST_CALLER, 0],
         )
 
         pool_event = create_pool_event(
@@ -132,8 +132,8 @@ class TestSupplyDataExtraction:
             topics=[
                 supply_topic,
                 HexBytes("0x" + "00" * 24 + TEST_RESERVE[2:]),
-                HexBytes("0x" + "00" * 24 + TEST_USER[2:]),
                 HexBytes("0x" + "00" * 24 + TEST_ONBEHALF[2:]),
+                HexBytes("0x" + "00" * 30 + "0000"),
             ],
             data=data,
         )

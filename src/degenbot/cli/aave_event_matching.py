@@ -1034,12 +1034,12 @@ class OperationAwareEventMatcher:
 
     def _extract_supply_data(self) -> dict[str, int]:
         """Extract data from SUPPLY event."""
-        # SUPPLY: data=(address caller, uint256 amount, uint16 referralCode)
-        # Skip the first 32 bytes (address caller) and decode the amount
+        # SUPPLY: indexed reserve, indexed onBehalfOf, indexed referralCode
+        # data=(address user, uint256 amount)
         if self.operation.pool_event is None:
             return {"raw_amount": 0}
-        _, raw_amount, _ = decode(
-            types=["address", "uint256", "uint16"],
+        user, raw_amount = decode(
+            types=["address", "uint256"],
             data=self.operation.pool_event["data"],
         )
         return {

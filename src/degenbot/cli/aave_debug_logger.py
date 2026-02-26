@@ -282,17 +282,8 @@ class AaveDebugLogger:
             "block_number": context.block_number,
             "event_count": len(context.events),
             "event_topics": event_topics,
-            "pool_events_count": len(context.pool_events),
-            "collateral_mints_count": len(context.collateral_mints),
-            "collateral_burns_count": len(context.collateral_burns),
-            "debt_mints_count": len(context.debt_mints),
-            "debt_burns_count": len(context.debt_burns),
-            "gho_mints_count": len(context.gho_mints),
-            "gho_burns_count": len(context.gho_burns),
-            "balance_transfers_count": len(context.balance_transfers),
-            "discount_updates_count": len(context.discount_updates),
             "user_discounts_count": len(context.user_discounts),
-            "stk_aave_transfers_count": len(context.stk_aave_transfers),
+            "discount_updates_count": len(context.discount_updates_by_log_index),
         }
 
     def _serialize_event(self, event: LogReceipt) -> dict[str, Any]:

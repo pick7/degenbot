@@ -863,7 +863,7 @@ def aave_update(
                 msg = f"{to_block} is ahead of the current chain tip."
                 raise ValueError(msg)
 
-            if initial_start_block >= last_block:
+            if initial_start_block > last_block:
                 msg = (
                     f"Chain {chain_id}: --to-block ({last_block}) must be greater than the "
                     f"market's last update block ({initial_start_block - 1})."
@@ -2837,21 +2837,25 @@ def _process_collateral_transfer_with_match(
     if scaled_event.from_address is None or scaled_event.target_address is None:
         return
 
+    # Skip BalanceTransfer events that are tracked in balance_transfer_events
+    # These will be handled by their paired ERC20 Transfer events
+    if scaled_event.index > 0 and context.operation and context.operation.balance_transfer_events:
+        for bt_event in context.operation.balance_transfer_events:
+            if bt_event["logIndex"] == scaled_event.event["logIndex"]:
+                # This BalanceTransfer is paired with an ERC20 Transfer
+                # Skip it - the ERC20 Transfer will handle the balance change
+                return
+
     # Skip transfers that are part of REPAY_WITH_ATOKENS operations
     # These transfers represent the internal movement of aTokens before burning,
     # and the collateral burn event will handle the actual balance reduction
     if context.operation and context.operation.operation_type == OperationType.REPAY_WITH_ATOKENS:
         return
 
-    # Skip transfers from zero address (mint events) to the treasury
-    # These are protocol reserve mints via mintToTreasury() and should not
-    # affect the treasury's collateral position balance
+    # Skip transfers from zero address (mint events)
+    # These are protocol reserve mints via mintToTreasury()
     if scaled_event.from_address == ZERO_ADDRESS:
-        # Check if this is a mint to the treasury
-        # The treasury address for Aave V3 on Ethereum
-        treasury_address = get_checksum_address("0x464C71f6c2F760DdA6093dCB91C24c39e5d6e18c")
-        if scaled_event.target_address == treasury_address:
-            return
+        return
 
     # Skip ERC20 transfers that correspond to collateral burns in repayWithATokens
     # When useATokens=true, the aTokens are transferred to the Pool and then burned.
@@ -2935,21 +2939,43 @@ def _process_collateral_transfer_with_match(
     # Standalone ERC20 Transfer without BalanceTransfer event
     # Need to scale the amount using the current liquidity index
     elif collateral_asset.a_token_revision >= 4:
-        pool_processor = PoolProcessorFactory.get_pool_processor_for_token_revision(
-            collateral_asset.a_token_revision
-        )
-        # Get liquidity index from the asset's reserve data
-        liquidity_index = int(collateral_asset.liquidity_index)
-        transfer_amount = pool_processor.calculate_collateral_transfer_scaled_amount(
-            amount=scaled_event.amount,
-            liquidity_index=liquidity_index,
-        )
-        transfer_index = liquidity_index
+        # Special case: liquidation fee transfers to treasury should use raw amount
+        treasury_address = get_checksum_address("0x464C71f6c2F760DdA6093dCB91C24c39e5d6e18c")
+        if (
+            scaled_event.target_address == treasury_address
+            and context.operation
+            and context.operation.operation_type == OperationType.LIQUIDATION
+        ):
+            # Use raw amount for liquidation fee transfers to treasury
+            transfer_amount = scaled_event.amount
+            transfer_index = int(collateral_asset.liquidity_index)
+        else:
+            pool_processor = PoolProcessorFactory.get_pool_processor_for_token_revision(
+                collateral_asset.a_token_revision
+            )
+            # Get liquidity index from the asset's reserve data
+            liquidity_index = int(collateral_asset.liquidity_index)
+            transfer_amount = pool_processor.calculate_collateral_transfer_scaled_amount(
+                amount=scaled_event.amount,
+                liquidity_index=liquidity_index,
+            )
+            transfer_index = liquidity_index
     else:
         # Revision 1-3: standard ray_div using asset's liquidity index
-        liquidity_index = int(collateral_asset.liquidity_index)
-        transfer_amount = scaled_event.amount * liquidity_index // 10**27
-        transfer_index = liquidity_index
+        # Special case: liquidation fee transfers to treasury should use raw amount
+        treasury_address = get_checksum_address("0x464C71f6c2F760DdA6093dCB91C24c39e5d6e18c")
+        if (
+            scaled_event.target_address == treasury_address
+            and context.operation
+            and context.operation.operation_type == OperationType.LIQUIDATION
+        ):
+            # Use raw amount for liquidation fee transfers to treasury
+            transfer_amount = scaled_event.amount
+            transfer_index = int(collateral_asset.liquidity_index)
+        else:
+            liquidity_index = int(collateral_asset.liquidity_index)
+            transfer_amount = scaled_event.amount * liquidity_index // 10**27
+            transfer_index = liquidity_index
 
     # Update sender's balance
     sender_position.balance -= transfer_amount
@@ -2957,8 +2983,14 @@ def _process_collateral_transfer_with_match(
     if transfer_index > 0:
         sender_position.last_index = transfer_index
 
-    # Handle recipient
-    if scaled_event.target_address != ZERO_ADDRESS:
+    # Handle recipient (if not treasury)
+    # The treasury (0x464C71f6c2F760DdA6093dCB91C24c39e5d6e18c) receives liquidation fees
+    # and protocol reserves, but should not have its collateral position tracked
+    treasury_address = get_checksum_address("0x464C71f6c2F760DdA6093dCB91C24c39e5d6e18c")
+    if (
+        scaled_event.target_address != ZERO_ADDRESS
+        and scaled_event.target_address != treasury_address
+    ):
         recipient = _get_or_create_user(
             context=context,
             market=context.market,
