@@ -761,7 +761,7 @@ class TransactionOperationsParser:
         # Decode WITHDRAW event
         reserve = self._decode_address(withdraw_event["topics"][1])
         user = self._decode_address(withdraw_event["topics"][2])
-        amount = decode(["uint256"], withdraw_event["data"])[0]
+        (amount,) = decode(["uint256"], withdraw_event["data"])
 
         # Find collateral burn for this user
         collateral_burn = None

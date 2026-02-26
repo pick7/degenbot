@@ -1038,10 +1038,10 @@ class OperationAwareEventMatcher:
         # Skip the first 32 bytes (address caller) and decode the amount
         if self.operation.pool_event is None:
             return {"raw_amount": 0}
-        raw_amount = decode(
-            types=["uint256"],
-            data=self.operation.pool_event["data"][32:],  # Skip first 32 bytes (address)
-        )[0]
+        _, raw_amount, _ = decode(
+            types=["address", "uint256", "uint16"],
+            data=self.operation.pool_event["data"],
+        )
         return {
             "raw_amount": raw_amount,
         }
@@ -1051,10 +1051,10 @@ class OperationAwareEventMatcher:
         # WITHDRAW: data=(uint256 amount)
         if self.operation.pool_event is None:
             return {"raw_amount": 0}
-        raw_amount = decode(
+        (raw_amount,) = decode(
             types=["uint256"],
             data=self.operation.pool_event["data"],
-        )[0]
+        )
         return {
             "raw_amount": raw_amount,
         }
@@ -1065,10 +1065,10 @@ class OperationAwareEventMatcher:
         # Skip the first 32 bytes (address caller) and decode the amount
         if self.operation.pool_event is None:
             return {"raw_amount": 0}
-        raw_amount = decode(
-            types=["uint256"],
-            data=self.operation.pool_event["data"][32:],  # Skip first 32 bytes (address)
-        )[0]
+        _, raw_amount, _, _ = decode(
+            types=["address", "uint256", "uint8", "uint256"],
+            data=self.operation.pool_event["data"],
+        )
         return {
             "raw_amount": raw_amount,
         }
@@ -1107,10 +1107,10 @@ class OperationAwareEventMatcher:
         # DEFICIT_CREATED: data=(uint256 amountCreated)
         if self.operation.pool_event is None:
             return {"amount_created": 0}
-        amount_created = decode(
+        (amount_created,) = decode(
             types=["uint256"],
             data=self.operation.pool_event["data"],
-        )[0]
+        )
         return {
             "amount_created": amount_created,
         }
