@@ -2481,17 +2481,12 @@ def _process_operation(
 
         # Special handling for MINT_TO_TREASURY operations
         # These don't have pool events, so we skip matching and process directly
+        # MINT_TO_TREASURY operations represent protocol reserves being minted
+        # to the treasury address. These should not update the treasury's
+        # collateral position balance since they are not user deposits.
         if operation.operation_type == OperationType.MINT_TO_TREASURY:
-            if scaled_event.event_type == "COLLATERAL_MINT":
-                _process_collateral_mint_with_match(
-                    context=context,
-                    scaled_event=scaled_event,
-                    match_result={
-                        "pool_event": None,
-                        "should_consume": False,
-                        "extraction_data": {},
-                    },
-                )
+            # Skip processing MINT_TO_TREASURY events - they represent protocol
+            # reserves being minted to the treasury, not user collateral positions
             continue
 
         # Find match within operation context
@@ -2847,6 +2842,16 @@ def _process_collateral_transfer_with_match(
     # and the collateral burn event will handle the actual balance reduction
     if context.operation and context.operation.operation_type == OperationType.REPAY_WITH_ATOKENS:
         return
+
+    # Skip transfers from zero address (mint events) to the treasury
+    # These are protocol reserve mints via mintToTreasury() and should not
+    # affect the treasury's collateral position balance
+    if scaled_event.from_address == ZERO_ADDRESS:
+        # Check if this is a mint to the treasury
+        # The treasury address for Aave V3 on Ethereum
+        treasury_address = get_checksum_address("0x464C71f6c2F760DdA6093dCB91C24c39e5d6e18c")
+        if scaled_event.target_address == treasury_address:
+            return
 
     # Skip ERC20 transfers that correspond to collateral burns in repayWithATokens
     # When useATokens=true, the aTokens are transferred to the Pool and then burned.
@@ -5474,7 +5479,7 @@ def update_aave_market(
     """
 
     logger.info(
-        f"Updating market {market.id} (chain {market.chain_id}): "
+        f"Updating {market.name} (chain {market.chain_id}): "
         f"block range {start_block:,} - {end_block:,}"
     )
 
