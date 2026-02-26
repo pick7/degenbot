@@ -33,6 +33,7 @@ class CollateralV1Processor(CollateralTokenProcessor):
         event_data: CollateralMintEvent,
         previous_balance: int,  # noqa: ARG002
         previous_index: int,  # noqa: ARG002
+        scaled_delta: int | None = None,  # noqa: ARG002
     ) -> MintResult:
         """
         Process a collateral mint event.
@@ -92,6 +93,7 @@ class CollateralV1Processor(CollateralTokenProcessor):
         event_data: CollateralBurnEvent,
         previous_balance: int,  # noqa: ARG002
         previous_index: int,  # noqa: ARG002
+        scaled_delta: int | None = None,  # noqa: ARG002
     ) -> BurnResult:
         """
         Process a collateral burn event.
@@ -102,6 +104,7 @@ class CollateralV1Processor(CollateralTokenProcessor):
             event_data: The burn event data
             previous_balance: The user's balance before this event
             previous_index: The index at previous_balance calculation
+            scaled_delta: Unused for revisions 1-3 (calculated from event data)
 
         Returns:
             BurnResult with balance_delta and new_index

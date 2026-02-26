@@ -29,6 +29,7 @@ from degenbot.aave.processors import (
     PoolProcessorFactory,
     TokenProcessorFactory,
 )
+from degenbot.aave.processors.base import BurnResult, MintResult
 from degenbot.checksum_cache import get_checksum_address
 from degenbot.cli import cli
 from degenbot.cli.aave_debug_logger import aave_debug_logger
@@ -2031,10 +2032,11 @@ def _process_scaled_token_operation(
             collateral_processor = TokenProcessorFactory.get_collateral_processor(
                 scaled_token_revision
             )
-            mint_result = collateral_processor.process_mint_event(
+            mint_result: MintResult = collateral_processor.process_mint_event(
                 event_data=event,
                 previous_balance=position.balance,
                 previous_index=position.last_index or 0,
+                scaled_delta=event.scaled_amount,
             )
             position.balance += mint_result.balance_delta
             position.last_index = mint_result.new_index
@@ -2045,10 +2047,11 @@ def _process_scaled_token_operation(
             collateral_processor = TokenProcessorFactory.get_collateral_processor(
                 scaled_token_revision
             )
-            burn_result = collateral_processor.process_burn_event(
+            burn_result: BurnResult = collateral_processor.process_burn_event(
                 event_data=event,
                 previous_balance=position.balance,
                 previous_index=position.last_index or 0,
+                scaled_delta=event.scaled_amount,
             )
             position.balance += burn_result.balance_delta
             position.last_index = burn_result.new_index
@@ -2057,10 +2060,11 @@ def _process_scaled_token_operation(
         case DebtMintEvent():
             assert isinstance(position, AaveV3DebtPositionsTable)
             debt_processor = TokenProcessorFactory.get_debt_processor(scaled_token_revision)
-            debt_mint_result = debt_processor.process_mint_event(
+            debt_mint_result: MintResult = debt_processor.process_mint_event(
                 event_data=event,
                 previous_balance=position.balance,
                 previous_index=position.last_index or 0,
+                scaled_delta=event.scaled_amount,
             )
             position.balance += debt_mint_result.balance_delta
             position.last_index = debt_mint_result.new_index
@@ -2069,10 +2073,11 @@ def _process_scaled_token_operation(
         case DebtBurnEvent():
             assert isinstance(position, AaveV3DebtPositionsTable)
             debt_processor = TokenProcessorFactory.get_debt_processor(scaled_token_revision)
-            debt_burn_result = debt_processor.process_burn_event(
+            debt_burn_result: BurnResult = debt_processor.process_burn_event(
                 event_data=event,
                 previous_balance=position.balance,
                 previous_index=position.last_index or 0,
+                scaled_delta=event.scaled_amount,
             )
             position.balance += debt_burn_result.balance_delta
             position.last_index = debt_burn_result.new_index

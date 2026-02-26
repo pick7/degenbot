@@ -1034,12 +1034,13 @@ class OperationAwareEventMatcher:
 
     def _extract_supply_data(self) -> dict[str, int]:
         """Extract data from SUPPLY event."""
-        # SUPPLY: data=(address caller, uint256 amount)
+        # SUPPLY: data=(address caller, uint256 amount, uint16 referralCode)
+        # Skip the first 32 bytes (address caller) and decode the amount
         if self.operation.pool_event is None:
             return {"raw_amount": 0}
         raw_amount = decode(
             types=["uint256"],
-            data=self.operation.pool_event["data"],
+            data=self.operation.pool_event["data"][32:],  # Skip first 32 bytes (address)
         )[0]
         return {
             "raw_amount": raw_amount,
@@ -1060,12 +1061,13 @@ class OperationAwareEventMatcher:
 
     def _extract_borrow_data(self) -> dict[str, int]:
         """Extract data from BORROW event."""
-        # BORROW: data=(address caller, uint256 amount, uint8 interestRateMode, uint256 borrowRate)
+        # BORROW: data=(address caller, uint256 amount, uint8 interestRateMode, uint256 borrowRate, uint16 referralCode)
+        # Skip the first 32 bytes (address caller) and decode the amount
         if self.operation.pool_event is None:
             return {"raw_amount": 0}
         raw_amount = decode(
             types=["uint256"],
-            data=self.operation.pool_event["data"],
+            data=self.operation.pool_event["data"][32:],  # Skip first 32 bytes (address)
         )[0]
         return {
             "raw_amount": raw_amount,

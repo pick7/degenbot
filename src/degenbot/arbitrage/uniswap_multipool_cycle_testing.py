@@ -53,6 +53,8 @@ def _build_convex_problem(num_pools: int) -> Problem:
 
     num_tokens = num_pools
 
+    logger.info(f"Building initial CVXPY problem: {num_pools} pools")
+
     # Create unique fake pools & tokens to replicate the sorting and ordering mechanism used by
     # the instance method
     ordered_pools = [FakePool() for _ in range(num_pools)]
@@ -88,19 +90,18 @@ def _build_convex_problem(num_pools: int) -> Problem:
             uncompressed_reserves[pool_index, pool_index] = 1 * 10**18
             uncompressed_reserves[pool_index, pool_index + 1] = 1 * 10**18
 
-    # Identify the largest value to use as a common divisor for each token.
-    token_compression_factors = [
-        np.max(uncompressed_reserves[:, global_token_index[token]]) for token in ordered_tokens
-    ]
-
     # SET UP PARAMETERS
-    # Compress all pool reserves into a 0.0 - 1.0 value range by dividing by the compression
-    # factor (via elementwise multiplication of the inverse)
+    # Compress all pool balances into a [0.0, 1.0] interval by dividing by the largest token
+    # balance held by any pool
+    balance_compression_factors = [
+        1 / np.max(uncompressed_reserves[:, global_token_index[token]]) for token in ordered_tokens
+    ]
     compressed_reserves_pre_swap = Parameter(
         shape=(num_pools, num_tokens),
         name="compressed_reserves_pre_swap",
-        value=np.multiply(uncompressed_reserves, np.reciprocal(token_compression_factors)),
+        value=np.multiply(uncompressed_reserves, balance_compression_factors),
     )
+
     swap_fees = Parameter(
         shape=(num_pools, num_tokens),
         name="swap_fees",
@@ -170,6 +171,8 @@ def _build_convex_problem(num_pools: int) -> Problem:
         withdrawals[withdrawal_pool_index][token_index] = withdrawal_variable
         deposits[deposit_pool_index][token_index] = deposit_variable
 
+    # Construct block matrices using individual lists instead of numpy floats, since the problem
+    # objective is a maximization of the difference between two variables inside the matrices
     deposits = bmat(deposits)
     withdrawals = bmat(withdrawals)
 
@@ -187,20 +190,17 @@ def _build_convex_problem(num_pools: int) -> Problem:
         for pool in ordered_pools
     ]
 
-    constraints = []
-
-    # Pool invariants (x*y=k)
-    constraints.extend([
+    constraints = [
+        # Pool invariants (x*y=k)
         pool_ks_pre_swap[global_pool_index[pool]] <= pool_ks_post_swap[global_pool_index[pool]]
         for pool in ordered_pools
-    ])
-
+    ]
     problem = Problem(
         objective=Maximize(final_pool_withdrawal - initial_pool_deposit),
         constraints=constraints,
     )
     assert problem.is_dcp(dpp=True)  # type: ignore[call-arg]
-    problem.solve(solver="CLARABEL")
+    problem.solve(solver=cvxpy.CLARABEL, enforce_dpp=True)
     return problem
 
 
@@ -215,10 +215,7 @@ class _UniswapMultiPoolCycleTesting(UniswapLpCycle):
             int,  # number of pools
             Problem,
         ]
-    ] = {
-        3: _build_convex_problem(num_pools=3),
-        4: _build_convex_problem(num_pools=4),
-    }
+    ] = {}
 
     def _calculate(  # type: ignore[override]
         self,
@@ -244,11 +241,11 @@ class _UniswapMultiPoolCycleTesting(UniswapLpCycle):
             """
 
             def get_token_balance_at_pool(
-                token: Erc20Token,
+                token: Erc20Token | FakeToken,
                 pool: Pool,
                 state_override: PoolState | None = None,
             ) -> Fraction:
-                if token not in pool.tokens:
+                if token not in pool.tokens or isinstance(token, FakeToken):
                     return Fraction(0)
 
                 state = state_override or pool.state
@@ -257,24 +254,30 @@ class _UniswapMultiPoolCycleTesting(UniswapLpCycle):
                     10**token.decimals,
                 )
 
-            def order_tokens(pools: Sequence[Pool]) -> tuple[Erc20Token, ...]:
-                ordered_tokens: list[Erc20Token] = [self.input_token]
+            def order_tokens(pools: Sequence[Pool]) -> tuple[Erc20Token | FakeToken, ...]:
+                ordered_tokens: list[Erc20Token | FakeToken] = [self.input_token]
 
                 for pool in pools:
                     for token in pool.tokens:
                         if token not in ordered_tokens:
                             ordered_tokens.append(token)
 
-                assert len(ordered_tokens) == len(pools), f"{ordered_tokens=}, {pools=}"
-                return tuple(ordered_tokens)
+                ordered_tokens.extend(FakeToken() for _ in range(len(pools) - len(ordered_tokens)))
 
-            # Reuse the pre-compiled problem
-            problem = type(self).convex_problems[len(self.swap_pools)]
+                # removed assertion: WETH-X -> X-Y -> Y->X -> X-WETH paths should be valid as long
+                # as all are unique
+                # assert len(ordered_tokens) == len(pools), f"{ordered_tokens=}, {pools=}"
+                return tuple(ordered_tokens)
 
             # TODO: review if pools should be dynamically sorted, or filtered pre-check and assumed
             # to be passed in order
             ordered_pools = pools
             ordered_tokens = order_tokens(pools)
+
+            # Reuse the pre-compiled problem
+            if (problem := type(self).convex_problems.get(len(ordered_pools))) is None:
+                problem = _build_convex_problem(len(ordered_pools))
+                type(self).convex_problems[len(ordered_pools)] = problem
 
             global_pool_index = {pool: i for i, pool in enumerate(ordered_pools)}
             global_token_index = {token: i for i, token in enumerate(ordered_tokens)}
@@ -294,11 +297,7 @@ class _UniswapMultiPoolCycleTesting(UniswapLpCycle):
                 dtype=np.float64,
             )
 
-            # Identify the largest value to use as a common divisor for each token.
-            token_compression_factors = [
-                np.max(uncompressed_reserves[:, global_token_index[token]])
-                for token in ordered_tokens
-            ]
+            # print(f"{uncompressed_reserves=}")
 
             # SET UP PARAMETERS
             assert len(problem.param_dict) == 3  # noqa: PLR2004
@@ -327,8 +326,20 @@ class _UniswapMultiPoolCycleTesting(UniswapLpCycle):
                     dtype=np.float64,
                 ),
             )
+
+            # Compress all pool balances into a [0.0, 1.0] interval by dividing by the largest token
+            # balance held by any pool, or setting to zero for placeholder tokens
+            balance_compression_factors = np.array(
+                [
+                    np.float64(0)
+                    if isinstance(token, FakeToken)
+                    else 1 / np.max(uncompressed_reserves[:, global_token_index[token]])
+                    for token in ordered_tokens
+                ],
+                dtype=np.float64,
+            )
             compressed_reserves_pre_swap.save_value(
-                np.multiply(uncompressed_reserves, np.reciprocal(token_compression_factors))
+                np.multiply(uncompressed_reserves, balance_compression_factors)
             )
             pool_ks_pre_swap.save_value([
                 geo_mean(
@@ -345,7 +356,7 @@ class _UniswapMultiPoolCycleTesting(UniswapLpCycle):
             try:
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore")
-                    problem.solve(solver=cvxpy.CLARABEL)
+                    problem.solve(solver=cvxpy.CLARABEL, enforce_dpp=True)
             except SolverError as exc:
                 raise ArbitrageError(message=f"Solver error: {exc}") from None
 
@@ -355,35 +366,11 @@ class _UniswapMultiPoolCycleTesting(UniswapLpCycle):
             if problem.value <= 0:
                 raise Unprofitable
 
-            if DEBUG_VERIFY_CACHED_PROBLEM:
-                try:
-                    new_problem = Problem(
-                        objective=problem.objective,
-                        constraints=problem.constraints,
-                    )
-                    with warnings.catch_warnings():
-                        warnings.simplefilter("ignore")
-                        new_problem.solve(solver=cvxpy.CLARABEL)
-                except SolverError:
-                    raise ArbitrageError(message="Solver error") from None
-                else:
-                    if new_problem.value != problem.value:
-                        result_percent_difference = (
-                            100
-                            * abs(new_problem.value - problem.value)
-                            / ((new_problem.value + problem.value) / 2)
-                        )
-                        logger.error(
-                            f"Cached problem result ({problem.value}) within {result_percent_difference:.2f}% of fresh result ({new_problem.value})"  # noqa: E501
-                        )
-                        err_msg = "Result mismatch"
-                        raise ValueError(err_msg)
-
             amounts: list[UniswapV2PoolSwapAmounts] = []
             initial_pool_deposit = problem.var_dict["initial_pool_deposit"]
             initial_amount_in = int(
                 initial_pool_deposit.value
-                * token_compression_factors[global_token_index[self.input_token]]
+                * balance_compression_factors[global_token_index[self.input_token]]
                 * 10**self.input_token.decimals
             )
             for i, pool in enumerate(ordered_pools):
@@ -481,6 +468,64 @@ class _UniswapMultiPoolCycleTesting(UniswapLpCycle):
             calldata: Bytes[MAX_PAYLOAD_BYTES]
             will_callback: bool
         """
+
+        def _generate_v2_v2_payloads() -> list[tuple[ChecksumAddress, bytes, bool]]:
+            return [
+                (
+                    # Swap at final pool, send profit token back to contract
+                    pool_swap_amounts[1].pool,
+                    web3.Web3.keccak(text="swap(uint256,uint256,address,bytes)")[:4]
+                    + eth_abi.abi.encode(
+                        types=(
+                            "uint256",
+                            "uint256",
+                            "address",
+                            "bytes",
+                        ),
+                        args=(
+                            *pool_swap_amounts[1].amounts_out,
+                            from_address,
+                            b"x",  # <--- trigger callback
+                        ),
+                    ),
+                    True,
+                ),
+                (
+                    # Transfer token to pay first pool
+                    self.input_token.address,
+                    web3.Web3.keccak(text="transfer(address,uint256)")[:4]
+                    + eth_abi.abi.encode(
+                        types=(
+                            "address",
+                            "uint256",
+                        ),
+                        args=(
+                            pool_swap_amounts[0].pool,
+                            max(pool_swap_amounts[0].amounts_in),
+                        ),
+                    ),
+                    False,
+                ),
+                (
+                    # Final swap
+                    pool_swap_amounts[0].pool,
+                    web3.Web3.keccak(text="swap(uint256,uint256,address,bytes)")[:4]
+                    + eth_abi.abi.encode(
+                        types=(
+                            "uint256",
+                            "uint256",
+                            "address",
+                            "bytes",
+                        ),
+                        args=(
+                            *pool_swap_amounts[0].amounts_out,
+                            pool_swap_amounts[1].pool,
+                            b"",
+                        ),
+                    ),
+                    False,
+                ),
+            ]
 
         def _generate_v2_v2_v2_payloads() -> list[tuple[ChecksumAddress, bytes, bool]]:
             return [
@@ -655,7 +700,127 @@ class _UniswapMultiPoolCycleTesting(UniswapLpCycle):
                 ),
             ]
 
+        def _generate_v2_v2_v2_v2_v2_payloads() -> list[tuple[ChecksumAddress, bytes, bool]]:
+            return [
+                (
+                    # Swap at final pool, send profit token back to contract
+                    pool_swap_amounts[4].pool,
+                    web3.Web3.keccak(text="swap(uint256,uint256,address,bytes)")[:4]
+                    + eth_abi.abi.encode(
+                        types=(
+                            "uint256",
+                            "uint256",
+                            "address",
+                            "bytes",
+                        ),
+                        args=(
+                            *pool_swap_amounts[4].amounts_out,
+                            from_address,
+                            b"x",  # <--- trigger callback
+                        ),
+                    ),
+                    True,
+                ),
+                (
+                    # Transfer token to pay first pool
+                    self.input_token.address,
+                    web3.Web3.keccak(text="transfer(address,uint256)")[:4]
+                    + eth_abi.abi.encode(
+                        types=(
+                            "address",
+                            "uint256",
+                        ),
+                        args=(
+                            pool_swap_amounts[0].pool,
+                            max(pool_swap_amounts[0].amounts_in),
+                        ),
+                    ),
+                    False,
+                ),
+                (
+                    # First pool swap
+                    pool_swap_amounts[0].pool,
+                    web3.Web3.keccak(text="swap(uint256,uint256,address,bytes)")[:4]
+                    + eth_abi.abi.encode(
+                        types=(
+                            "uint256",
+                            "uint256",
+                            "address",
+                            "bytes",
+                        ),
+                        args=(
+                            *pool_swap_amounts[0].amounts_out,
+                            pool_swap_amounts[1].pool,
+                            b"",
+                        ),
+                    ),
+                    False,
+                ),
+                (
+                    # Second pool swap
+                    pool_swap_amounts[1].pool,
+                    web3.Web3.keccak(text="swap(uint256,uint256,address,bytes)")[:4]
+                    + eth_abi.abi.encode(
+                        types=(
+                            "uint256",
+                            "uint256",
+                            "address",
+                            "bytes",
+                        ),
+                        args=(
+                            *pool_swap_amounts[1].amounts_out,
+                            pool_swap_amounts[2].pool,
+                            b"",
+                        ),
+                    ),
+                    False,
+                ),
+                (
+                    # Third pool swap
+                    pool_swap_amounts[2].pool,
+                    web3.Web3.keccak(text="swap(uint256,uint256,address,bytes)")[:4]
+                    + eth_abi.abi.encode(
+                        types=(
+                            "uint256",
+                            "uint256",
+                            "address",
+                            "bytes",
+                        ),
+                        args=(
+                            *pool_swap_amounts[2].amounts_out,
+                            pool_swap_amounts[3].pool,
+                            b"",
+                        ),
+                    ),
+                    False,
+                ),
+                (
+                    # Fourth pool swap
+                    pool_swap_amounts[3].pool,
+                    web3.Web3.keccak(text="swap(uint256,uint256,address,bytes)")[:4]
+                    + eth_abi.abi.encode(
+                        types=(
+                            "uint256",
+                            "uint256",
+                            "address",
+                            "bytes",
+                        ),
+                        args=(
+                            *pool_swap_amounts[3].amounts_out,
+                            pool_swap_amounts[4].pool,
+                            b"",
+                        ),
+                    ),
+                    False,
+                ),
+            ]
+
         match self.swap_pools:
+            case (
+                AerodromeV2Pool() | UniswapV2Pool(),
+                AerodromeV2Pool() | UniswapV2Pool(),
+            ):
+                return _generate_v2_v2_payloads()
             case (
                 AerodromeV2Pool() | UniswapV2Pool(),
                 AerodromeV2Pool() | UniswapV2Pool(),
@@ -669,6 +834,14 @@ class _UniswapMultiPoolCycleTesting(UniswapLpCycle):
                 AerodromeV2Pool() | UniswapV2Pool(),
             ):
                 return _generate_v2_v2_v2_v2_payloads()
+            case (
+                AerodromeV2Pool() | UniswapV2Pool(),
+                AerodromeV2Pool() | UniswapV2Pool(),
+                AerodromeV2Pool() | UniswapV2Pool(),
+                AerodromeV2Pool() | UniswapV2Pool(),
+                AerodromeV2Pool() | UniswapV2Pool(),
+            ):
+                return _generate_v2_v2_v2_v2_v2_payloads()
             case _:
                 err = f"Could not identify pool types {self.swap_pools}"
                 raise ValueError(err)
