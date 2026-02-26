@@ -100,9 +100,9 @@ GHO_VARIABLE_DEBT_TOKEN_ADDRESS = get_checksum_address("0x786dBff3f1292ae8F92ea6
 
 
 # Feature flag for operation-based event processing
-# Set to True to enable the new operation-aware processing
+# Set to False to disable the operation-aware processing
 USE_OPERATION_BASED_PROCESSING: bool = os.environ.get(
-    "DEGENBOT_USE_OPERATIONS", "false"
+    "DEGENBOT_USE_OPERATIONS", "true"
 ).lower() in {"1", "true", "yes"}
 
 """

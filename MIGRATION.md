@@ -333,7 +333,7 @@ balance_transfer_events.append(balance_transfer_event.event)  # Now
 
 ### Next Steps
 1. ✅ **COMPLETED:** Integration test to block 18M successful
-2. 🚀 Enable operation-based processing by default (set `USE_OPERATION_BASED_PROCESSING = True`)
+2. ✅ **COMPLETED:** Enable operation-based processing by default (set `USE_OPERATION_BASED_PROCESSING = True`)
 3. Remove `DEGENBOT_USE_OPERATIONS` environment variable
 4. Remove legacy `_process_transaction_with_context` function
 5. Remove `EventMatcher` class
