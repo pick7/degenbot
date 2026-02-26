@@ -987,6 +987,8 @@ def _process_asset_initialization_event(
     ```
     """
 
+    logger.debug(f"Processing asset initialization event at block {event['blockNumber']}")
+
     asset_address = _decode_address(event["topics"][1])
     a_token_address = _decode_address(event["topics"][2])
 
@@ -1095,6 +1097,10 @@ def _process_user_e_mode_set_event(
     ```
     """
 
+    logger.debug(
+        f"Processing user E-mode set event for user at block {context.event['blockNumber']}"
+    )
+
     user_address = _decode_address(context.event["topics"][1])
 
     (e_mode,) = eth_abi.abi.decode(types=["uint8"], data=context.event["data"])
@@ -1124,6 +1130,8 @@ def _process_discount_token_updated_event(
     ```
     """
 
+    logger.debug(f"Processing discount token updated event at block {context.event['blockNumber']}")
+
     old_discount_token_address = _decode_address(context.event["topics"][1])
     new_discount_token_address = _decode_address(context.event["topics"][2])
 
@@ -1148,6 +1156,10 @@ def _process_discount_rate_strategy_updated_event(
     );
     ```
     """
+
+    logger.debug(
+        f"Processing discount rate strategy updated event at block {context.event['blockNumber']}"
+    )
 
     old_discount_rate_strategy_address = _decode_address(context.event["topics"][1])
     new_discount_rate_strategy_address = _decode_address(context.event["topics"][2])
@@ -1252,6 +1264,8 @@ def _process_stk_aave_transfer_event(context: EventHandlerContext) -> None:
     );
     ```
     """
+
+    logger.debug(f"Processing stkAAVE transfer event at block {context.event['blockNumber']}")
 
     gho_asset = context.gho_asset
     if gho_asset.v_gho_discount_token is None:
@@ -1368,6 +1382,9 @@ def _process_reserve_data_update_event(
     );
     ```
     """
+
+    logger.debug(f"Processing reserve data update event at block {context.event['blockNumber']}")
+
     reserve_asset_address = _decode_address(context.event["topics"][1])
 
     asset_in_db = None
@@ -1416,6 +1433,8 @@ def _process_scaled_token_upgrade_event(
     );
     ```
     """
+
+    logger.debug(f"Processing scaled token upgrade event at block {context.event['blockNumber']}")
 
     new_implementation_address = _decode_address(context.event["topics"][1])
 
@@ -2026,6 +2045,8 @@ def _process_scaled_token_operation(
         position: The user's position to update
     """
 
+    logger.debug(f"Processing scaled token operation for revision {scaled_token_revision}")
+
     match event:
         case CollateralMintEvent():
             assert isinstance(position, AaveV3CollateralPositionsTable)
@@ -2340,6 +2361,10 @@ def _process_transaction_with_operations(
 
     This function will eventually replace _process_transaction_with_context.
     """
+    logger.debug(
+        f"Processing _process_transaction_with_operations for tx at block {tx_context.block_number}"
+    )
+
     # Build token type mapping for proper event classification
     token_type_mapping: dict[ChecksumAddress, str] = {}
     for asset in market.assets:
@@ -2461,6 +2486,7 @@ def _process_operation(
     gho_asset: AaveGhoTokenTable,
 ) -> None:
     """Process a single operation."""
+    logger.debug(f"Processing _process_operation for tx at block {tx_context.block_number}")
 
     # Create matcher for this operation
     matcher = OperationAwareEventMatcher(operation)
@@ -2545,6 +2571,10 @@ def _process_collateral_mint_with_match(
     match_result: EventMatchResult,
 ) -> None:
     """Process collateral (aToken) mint with operation match."""
+    logger.debug(
+        f"Processing _process_collateral_mint_with_match at block {context.event['blockNumber']}"
+    )
+
     # Skip if user address is missing
     if scaled_event.user_address is None:
         return
@@ -2616,6 +2646,10 @@ def _process_collateral_burn_with_match(
     match_result: EventMatchResult,
 ) -> None:
     """Process collateral (aToken) burn with operation match."""
+    logger.debug(
+        f"Processing _process_collateral_burn_with_match at block {context.event['blockNumber']}"
+    )
+
     # Skip if user address is missing
     if scaled_event.user_address is None:
         return
@@ -2687,6 +2721,10 @@ def _process_debt_mint_with_match(
     match_result: EventMatchResult,
 ) -> None:
     """Process debt (vToken) mint with operation match."""
+    logger.debug(
+        f"Processing _process_debt_mint_with_match at block {context.event['blockNumber']}"
+    )
+
     # Skip if user address is missing
     if scaled_event.user_address is None:
         return
@@ -2760,6 +2798,10 @@ def _process_debt_burn_with_match(
     match_result: EventMatchResult,
 ) -> None:
     """Process debt (vToken) burn with operation match."""
+    logger.debug(
+        f"Processing _process_debt_burn_with_match at block {context.event['blockNumber']}"
+    )
+
     # Skip if user address is missing
     if scaled_event.user_address is None:
         return
@@ -2833,6 +2875,10 @@ def _process_collateral_transfer_with_match(
     match_result: EventMatchResult,
 ) -> None:
     """Process collateral (aToken) transfer between users."""
+    logger.debug(
+        f"Processing _process_collateral_transfer_with_match at block {context.event['blockNumber']}"
+    )
+
     # Skip if addresses are missing
     if scaled_event.from_address is None or scaled_event.target_address is None:
         return
@@ -3016,6 +3062,10 @@ def _process_debt_transfer_with_match(
     match_result: EventMatchResult,
 ) -> None:
     """Process debt (vToken) transfer between users."""
+    logger.debug(
+        f"Processing _process_debt_transfer_with_match at block {context.event['blockNumber']}"
+    )
+
     # Skip if addresses are missing
     if scaled_event.from_address is None or scaled_event.target_address is None:
         return
@@ -3106,6 +3156,7 @@ def _process_staked_aave_event(
 
     Uses pre-categorized stkAAVE events from TransactionContext.
     """
+    logger.debug(f"Processing _process_staked_aave_event at block {context.event['blockNumber']}")
 
     # Skip if discount mechanism is not supported (revision 4+)
     if discount_token is None or discount_rate_strategy is None:
@@ -3193,6 +3244,7 @@ def _process_aave_stake(
     );
     ```
     """
+    logger.debug(f"Processing _process_aave_stake at block {context.event['blockNumber']}")
 
     operation: UserOperation = UserOperation.AAVE_STAKED
 
@@ -3319,6 +3371,7 @@ def _process_aave_redeem(
     );
     ```
     """
+    logger.debug(f"Processing _process_aave_redeem at block {context.event['blockNumber']}")
 
     operation: UserOperation = UserOperation.AAVE_REDEEM
 
@@ -3443,6 +3496,9 @@ def _process_staked_aave_transfer(
     );
     ```
     """
+    logger.debug(
+        f"Processing _process_staked_aave_transfer at block {context.event['blockNumber']}"
+    )
 
     (amount_transferred,) = _decode_uint_values(
         event=triggering_event,
@@ -3776,6 +3832,8 @@ def _process_proxy_creation_event(
     """
     Process a proxy creation event (POOL or POOL_CONFIGURATOR).
     """
+    logger.debug(f"Processing _process_proxy_creation_event at block {event['blockNumber']}")
+
     (decoded_proxy_id,) = eth_abi.abi.decode(types=["bytes32"], data=event["topics"][1])
 
     if decoded_proxy_id != proxy_id:
@@ -3828,6 +3886,8 @@ def _process_umbrella_creation_event(
     - topics[2]: oldAddress (address) - typically 0x0 for new addresses
     - topics[3]: newAddress (address) - the actual contract address
     """
+    logger.debug(f"Processing _process_umbrella_creation_event at block {event['blockNumber']}")
+
     (decoded_proxy_id,) = eth_abi.abi.decode(types=["bytes32"], data=event["topics"][1])
 
     if decoded_proxy_id != proxy_id:
@@ -3871,6 +3931,9 @@ def _process_discount_percent_updated_event(
     );
     ```
     """
+    logger.debug(
+        f"Processing _process_discount_percent_updated_event at block {context.event['blockNumber']}"
+    )
 
     user_address = _decode_address(context.event["topics"][1])
 
@@ -3943,6 +4006,10 @@ def _process_collateral_mint_event(
     See debug/aave/0002 for value vs balance_increase matching logic.
     See debug/aave/0019 for value == balance_increase deposit case.
     """
+    logger.debug(
+        f"Processing _process_collateral_mint_event for tx at block {tx_context.block_number}"
+    )
+
     reserve_address = get_checksum_address(collateral_asset.underlying_token.address)
 
     # DEBUG: Log entry into collateral mint handler
@@ -4132,6 +4199,8 @@ def _process_gho_debt_mint_event(
 
     See debug/aave/0012b for GHO event matching patterns.
     """
+    logger.debug(f"Processing _process_gho_debt_mint_event at block {context.event['blockNumber']}")
+
     reserve_address = get_checksum_address(debt_asset.underlying_token.address)
 
     scaled_amount: int | None = None
@@ -4324,6 +4393,10 @@ def _process_standard_debt_mint_event(
 
     See debug/aave/ for event matching patterns and consumption rules.
     """
+    logger.debug(
+        f"Processing _process_standard_debt_mint_event for tx at block {tx_context.block_number}"
+    )
+
     reserve_address = get_checksum_address(debt_asset.underlying_token.address)
 
     scaled_amount: int | None = None
@@ -4465,6 +4538,9 @@ def _process_scaled_token_mint_event(context: EventHandlerContext) -> None:
     );
     ```
     """
+    logger.debug(
+        f"Processing _process_scaled_token_mint_event at block {context.event['blockNumber']}"
+    )
 
     caller_address = _decode_address(context.event["topics"][1])
     on_behalf_of_address = _decode_address(context.event["topics"][2])
@@ -4582,6 +4658,10 @@ def _process_collateral_burn_event(
 
     See debug/aave/0008, 0009 for consumption patterns.
     """
+    logger.debug(
+        f"Processing _process_collateral_burn_event for tx at block {tx_context.block_number}"
+    )
+
     reserve_address = get_checksum_address(collateral_asset.underlying_token.address)
 
     # Use EventMatcher to find matching pool event
@@ -4688,6 +4768,8 @@ def _process_gho_debt_burn_event(
 
     See debug/aave/0010 for GHO event matching patterns.
     """
+    logger.debug(f"Processing _process_gho_debt_burn_event at block {context.event['blockNumber']}")
+
     reserve_address = get_checksum_address(debt_asset.underlying_token.address)
 
     # Use EventMatcher to find matching pool event
@@ -4825,6 +4907,10 @@ def _process_standard_debt_burn_event(
 
     See debug/aave/0008, 0010, 0012a, 0013 for consumption patterns and edge cases.
     """
+    logger.debug(
+        f"Processing _process_standard_debt_burn_event for tx at block {tx_context.block_number}"
+    )
+
     reserve_address = get_checksum_address(debt_asset.underlying_token.address)
 
     # Use EventMatcher to find matching pool event
@@ -4926,6 +5012,9 @@ def _process_scaled_token_burn_event(context: EventHandlerContext) -> None:
     );
     ```
     """
+    logger.debug(
+        f"Processing _process_scaled_token_burn_event at block {context.event['blockNumber']}"
+    )
 
     # Skip burn events that were marked for skipping by BalanceTransfer processing
     # (e.g., when a contract receives aTokens via BalanceTransfer and immediately burns them)
@@ -5019,6 +5108,9 @@ def _process_scaled_token_balance_transfer_event(
     );
     ```
     """
+    logger.debug(
+        f"Processing _process_scaled_token_balance_transfer_event at block {context.event['blockNumber']}"
+    )
 
     from_address = _decode_address(context.event["topics"][1])
     to_address = _decode_address(context.event["topics"][2])
