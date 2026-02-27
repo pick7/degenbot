@@ -60,6 +60,7 @@ from degenbot.database.models.aave import (
     AaveV3UsersTable,
 )
 from degenbot.database.models.erc20 import Erc20TokenTable
+from degenbot.exceptions import DegenbotValueError
 from degenbot.functions import (
     encode_function_calldata,
     fetch_logs_retrying,
@@ -813,6 +814,10 @@ def aave_update(
                 )
             ).all()
         )
+
+        if not active_chains:
+            msg = "No active Aave markets found."
+            raise DegenbotValueError(msg)
 
         for chain_id in active_chains:
             w3 = get_web3_from_config(chain_id=chain_id)
