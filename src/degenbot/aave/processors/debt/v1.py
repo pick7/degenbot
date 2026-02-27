@@ -9,6 +9,7 @@ from degenbot.aave.processors.base import (
     MathLibraries,
     MintResult,
 )
+from degenbot.logging import logger
 
 
 class DebtV1Processor(DebtTokenProcessor):
@@ -69,14 +70,15 @@ class DebtV1Processor(DebtTokenProcessor):
             is_repay = False
         else:
             # REPAY path: emitted in _burnScaled
-            # Solidity: uint256 amountToMint = balanceIncrease - amount;
-            requested_amount = event_data.balance_increase - event_data.value
+            # The Mint event is emitted when interest > repayment amount.
+            # The net balance change is just burning the scaled repayment amount.
+            # amount = balanceIncrease - value (from Mint event)
+            amount_repaid = event_data.balance_increase - event_data.value
             balance_delta = -wad_ray_math.ray_div(
-                a=requested_amount,
+                a=amount_repaid,
                 b=event_data.index,
             )
             is_repay = True
-
         return MintResult(
             balance_delta=balance_delta,
             new_index=event_data.index,

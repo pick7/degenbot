@@ -141,9 +141,13 @@ class GhoV5Processor(GhoDebtTokenProcessor):
             # Revision 5+ uses floor division (ray_div_floor) for REPAY
             # to match TokenMath.getVTokenBurnScaledAmount behavior.
             # This prevents over-burning of vTokens.
-            requested_amount = event_data.balance_increase - event_data.value
+            #
+            # The Mint event is emitted when interest > repayment amount.
+            # The net balance change is just burning the scaled repayment amount.
+            # amount = balanceIncrease - value (from Mint event)
+            amount_repaid = event_data.balance_increase - event_data.value
             balance_delta = -wad_ray_math.ray_div_floor(
-                a=requested_amount,
+                a=amount_repaid,
                 b=event_data.index,
             )
             user_operation = GhoUserOperation.GHO_REPAY

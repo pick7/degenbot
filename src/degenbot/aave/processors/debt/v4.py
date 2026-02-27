@@ -173,10 +173,12 @@ class DebtV4Processor(DebtV1Processor):
             )
 
         # REPAY path: emitted in _burnScaled (interest accrual)
-        # Solidity: uint256 amountToMint = balanceIncrease - amount;
-        requested_amount = event_data.balance_increase - event_data.value
+        # The Mint event is emitted when interest > repayment amount.
+        # The net balance change is just burning the scaled repayment amount.
+        # amount = balanceIncrease - value (from Mint event)
+        amount_repaid = event_data.balance_increase - event_data.value
         balance_delta = -wad_ray_math.ray_div_floor(
-            a=requested_amount,
+            a=amount_repaid,
             b=event_data.index,
         )
         return MintResult(

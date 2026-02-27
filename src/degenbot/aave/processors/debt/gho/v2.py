@@ -76,9 +76,12 @@ class GhoV2Processor(GhoV1Processor):
 
         elif event_data.balance_increase > event_data.value:
             # GHO REPAY: emitted in _burnScaled
-            requested_amount = event_data.balance_increase - event_data.value
-            amount_scaled = wad_ray_math.ray_div(
-                a=requested_amount,
+            # The Mint event is emitted when interest > repayment amount.
+            # The net balance change is just burning the scaled repayment amount.
+            # amount = balanceIncrease - value (from Mint event)
+            amount_repaid = event_data.balance_increase - event_data.value
+            repayment_scaled = wad_ray_math.ray_div(
+                a=amount_repaid,
                 b=event_data.index,
             )
 
@@ -90,12 +93,12 @@ class GhoV2Processor(GhoV1Processor):
                 discount_percent=previous_discount,
             )
 
-            if requested_amount == balance_before_burn:
+            if amount_repaid == balance_before_burn:
                 # Full repayment: burn all scaled balance
                 balance_delta = -previous_balance
             else:
-                # Partial repayment
-                balance_delta = -(amount_scaled + discount_scaled)
+                # Partial repayment: net change is interest with discount minus repayment
+                balance_delta = discount_scaled - repayment_scaled
 
             user_operation = GhoUserOperation.GHO_REPAY
 

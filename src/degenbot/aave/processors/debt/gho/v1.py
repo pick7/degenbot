@@ -82,16 +82,18 @@ class GhoV1Processor(GhoDebtTokenProcessor):
             user_operation = GhoUserOperation.GHO_BORROW
         elif event_data.balance_increase > event_data.value:
             # GHO REPAY: emitted in _burnScaled
-            requested_amount = event_data.balance_increase - event_data.value
-            amount_scaled = wad_ray_math.ray_div(
-                a=requested_amount,
+            # The Mint event is emitted when interest > repayment amount.
+            # The net balance change is just burning the scaled repayment amount.
+            # amount = balanceIncrease - value (from Mint event)
+            # Note: discount_scaled already accrued via accrue_debt_on_action
+            amount_repaid = event_data.balance_increase - event_data.value
+            repayment_scaled = wad_ray_math.ray_div(
+                a=amount_repaid,
                 b=event_data.index,
             )
 
-            if amount_scaled > discount_scaled:
-                balance_delta = -(amount_scaled - discount_scaled)
-            else:
-                balance_delta = discount_scaled - amount_scaled
+            # Net change: interest with discount - repayment
+            balance_delta = discount_scaled - repayment_scaled
 
             user_operation = GhoUserOperation.GHO_REPAY
         else:

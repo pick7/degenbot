@@ -1265,7 +1265,10 @@ class TransactionOperationsParser:
             if ev.event_type in {"DEBT_MINT", "GHO_DEBT_MINT"}:
                 if has_liquidation or has_borrow:
                     continue
-                if has_repay and not has_collateral_burn:
+                # Skip DEBT_MINT during REPAY only if it's not interest accrual
+                # Interest accrual during repayment: balance_increase > amount
+                # This occurs in _burnScaled when interest > repayment amount
+                if has_repay and not has_collateral_burn and ev.balance_increase <= ev.amount:
                     continue
 
             # Interest accrual: balance_increase > 0

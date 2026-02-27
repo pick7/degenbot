@@ -661,17 +661,25 @@ class TestOperationValidation:
             HexBytes("0x" + "00" * 32),
         )
 
-        assert len(tx_ops.operations) == 1
-        op = tx_ops.operations[0]
+        # When balance_increase > amount, the DEBT_MINT represents interest accrual
+        # during repayment and is processed as a separate INTEREST_ACCRUAL operation
+        assert len(tx_ops.operations) == 2
+        repay_op = tx_ops.operations[0]
+        interest_op = tx_ops.operations[1]
 
-        assert op.operation_type == OperationType.REPAY
-        # Should have 0 debt burns (interest-only repayment)
-        debt_burns = [e for e in op.scaled_token_events if e.is_debt]
+        assert repay_op.operation_type == OperationType.REPAY
+        assert interest_op.operation_type == OperationType.INTEREST_ACCRUAL
+        # Should have 0 debt burns in REPAY (interest-only repayment)
+        debt_burns = [e for e in repay_op.scaled_token_events if e.is_debt]
         assert len(debt_burns) == 0
+        # INTEREST_ACCRUAL should have the debt mint
+        interest_mints = [e for e in interest_op.scaled_token_events if e.is_debt]
+        assert len(interest_mints) == 1
 
-        # Validation should pass with 0 burns - no exception raised
+        # Validation should pass - no exception raised
         tx_ops.validate([interest_mint_event, repay_event])
-        assert op.is_valid()
+        assert repay_op.is_valid()
+        assert interest_op.is_valid()
 
     def test_repay_with_one_debt_burn_validates(self):
         """Standard principal repayment has 1 debt burn."""

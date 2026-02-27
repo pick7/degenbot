@@ -3236,16 +3236,15 @@ def _process_debt_transfer_with_match(
     if scaled_event.target_address == ZERO_ADDRESS:
         return
 
+    # Skip transfers from zero address (mints) - these are handled by Mint events
+    # Processing both Transfer(from=0) and Mint would result in double-counting
+    # This occurs during _burnScaled when interest > repayment amount
+    if scaled_event.from_address == ZERO_ADDRESS:
+        return
+
     # Skip if addresses are missing
     if scaled_event.from_address is None or scaled_event.target_address is None:
         return
-
-    # DEBUG: Log debt transfer
-    print(
-        f"DEBUG DEBT TRANSFER: from={scaled_event.from_address}, to={scaled_event.target_address}, "
-        f"amount={scaled_event.amount}, index={scaled_event.index}",
-        flush=True,
-    )
 
     # Get sender
     sender = _get_or_create_user(
@@ -4190,6 +4189,11 @@ def _process_collateral_mint_event(
     reserve_address = get_checksum_address(collateral_asset.underlying_token.address)
 
     # DEBUG: Log entry into collateral mint handler
+    print(
+        f"DEBUG COLLATERAL MINT: user={user.address}, "
+        f"event_amount={event_amount}, balance_increase={balance_increase}",
+        flush=True,
+    )
     logger.debug(
         f"_process_collateral_mint_event called: "
         f"user={user.address}, token={token_address}, reserve={reserve_address}, "
