@@ -1749,6 +1749,39 @@ def _get_gho_asset(
     return gho_asset
 
 
+def _fetch_discount_token_from_contract(
+    w3: Web3,
+    gho_asset: AaveGhoTokenTable,
+    block_number: int,
+) -> ChecksumAddress | None:
+    """Fetch the discount token address from the GHO vToken contract.
+
+    This is used to initialize v_gho_discount_token when it's not set in the database
+    and no DISCOUNT_TOKEN_UPDATED events exist in the current block range.
+    """
+    try:
+        # GHO vToken has a getDiscountToken() function
+        (discount_token,) = raw_call(
+            w3=w3,
+            address=GHO_VARIABLE_DEBT_TOKEN_ADDRESS,
+            calldata=encode_function_calldata(
+                function_prototype="getDiscountToken()",
+                function_arguments=[],
+            ),
+            return_types=["address"],
+            block_identifier=block_number,
+        )
+        return get_checksum_address(discount_token)
+    except (
+        ValueError,
+        RuntimeError,
+        eth_abi.exceptions.DecodingError,
+        ContractLogicError,
+    ):
+        # Function may not exist in older revisions or other errors
+        return None
+
+
 def _get_contract(
     market: AaveV3MarketTable,
     contract_name: str,
@@ -2580,6 +2613,10 @@ def _process_transaction_with_operations(
             _process_discount_token_updated_event(context)
         elif topic == AaveV3Event.DISCOUNT_RATE_STRATEGY_UPDATED.value:
             _process_discount_rate_strategy_updated_event(context)
+        elif topic == AaveV3Event.ERC20_TRANSFER.value and event_address == (
+            gho_asset.v_gho_discount_token if gho_asset else None
+        ):
+            _process_stk_aave_transfer_event(context)
 
 
 def _process_operation(
@@ -6121,6 +6158,24 @@ def update_aave_market(
                     f"SET NEW DISCOUNT TOKEN: {_decode_address(event['topics'][1])} -> "
                     f"{new_discount_token_address}"
                 )
+
+        # If v_gho_discount_token is still None, try to fetch it from the contract
+        # This handles the case where we're processing blocks before any
+        # DISCOUNT_TOKEN_UPDATED event or when the database hasn't been initialized
+        if gho_asset.v_gho_discount_token is None:
+            try:
+                discount_token_from_contract = _fetch_discount_token_from_contract(
+                    w3=w3,
+                    gho_asset=gho_asset,
+                    block_number=start_block,
+                )
+                if discount_token_from_contract:
+                    gho_asset.v_gho_discount_token = discount_token_from_contract
+                    logger.info(
+                        f"Fetched discount token from contract: {discount_token_from_contract}"
+                    )
+            except Exception as e:
+                logger.debug(f"Could not fetch discount token from contract: {e}")
 
         all_events.extend(
             _fetch_stk_aave_events(
