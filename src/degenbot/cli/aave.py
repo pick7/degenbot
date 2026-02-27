@@ -2978,22 +2978,75 @@ def _process_debt_mint_with_match(
             borrow_index=scaled_event.index,
         )
 
-    _process_scaled_token_operation(
-        event=DebtMintEvent(
-            caller=scaled_event.caller_address or scaled_event.user_address,
-            on_behalf_of=scaled_event.user_address,
-            value=scaled_event.amount,
-            balance_increase=scaled_event.balance_increase,
-            index=scaled_event.index,
-            scaled_amount=scaled_amount,
-        ),
-        scaled_token_revision=debt_asset.v_token_revision,
-        position=debt_position,
-    )
+    # Check if this is a GHO token and use GHO-specific processing
+    if token_address == GHO_VARIABLE_DEBT_TOKEN_ADDRESS:
+        # Use the effective discount from transaction context or user record
+        effective_discount = (
+            context.tx_context.user_discounts.get(user.address, user.gho_discount)
+            if context.tx_context is not None
+            else user.gho_discount
+        )
 
-    # Update last_index
-    if scaled_event.index > 0:
-        debt_position.last_index = scaled_event.index
+        # Process using GHO-specific processor
+        gho_processor = TokenProcessorFactory.get_gho_debt_processor(debt_asset.v_token_revision)
+        gho_result = gho_processor.process_mint_event(
+            event_data=DebtMintEvent(
+                caller=scaled_event.caller_address or scaled_event.user_address,
+                on_behalf_of=scaled_event.user_address,
+                value=scaled_event.amount,
+                balance_increase=scaled_event.balance_increase,
+                index=scaled_event.index,
+                scaled_amount=scaled_amount,
+            ),
+            previous_balance=debt_position.balance,
+            previous_index=debt_position.last_index or 0,
+            previous_discount=effective_discount,
+        )
+
+        # Apply the calculated balance delta and update index
+        debt_position.balance += gho_result.balance_delta
+        debt_position.last_index = gho_result.new_index
+
+        # Refresh discount if needed
+        if (
+            gho_result.should_refresh_discount
+            and context.gho_asset.v_gho_discount_token is not None
+        ):
+            discount_token_balance = _get_or_init_stk_aave_balance(
+                user=user,
+                discount_token=context.gho_asset.v_gho_discount_token,
+                block_number=scaled_event.event["blockNumber"],
+                w3=context.w3,
+                tx_context=context.tx_context,
+                log_index=scaled_event.event["logIndex"],
+            )
+            _refresh_discount_rate(
+                user=user,
+                has_discount_rate_strategy=context.gho_asset.v_gho_discount_rate_strategy
+                is not None,
+                discount_token_balance=discount_token_balance,
+                scaled_debt_balance=debt_position.balance,
+                debt_index=scaled_event.index,
+                wad_ray_math=gho_processor.get_math_libraries()["wad_ray"],
+            )
+    else:
+        # Use standard debt processor for non-GHO tokens
+        _process_scaled_token_operation(
+            event=DebtMintEvent(
+                caller=scaled_event.caller_address or scaled_event.user_address,
+                on_behalf_of=scaled_event.user_address,
+                value=scaled_event.amount,
+                balance_increase=scaled_event.balance_increase,
+                index=scaled_event.index,
+                scaled_amount=scaled_amount,
+            ),
+            scaled_token_revision=debt_asset.v_token_revision,
+            position=debt_position,
+        )
+
+        # Update last_index
+        if scaled_event.index > 0:
+            debt_position.last_index = scaled_event.index
 
 
 def _process_debt_burn_with_match(
