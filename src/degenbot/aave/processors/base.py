@@ -238,6 +238,7 @@ class DebtTokenProcessor(TokenProcessor, Protocol):
         event_data: DebtBurnEvent,
         previous_balance: int,
         previous_index: int,
+        scaled_delta: int | None = None,
     ) -> BurnResult:
         """
         Process a debt burn event.
@@ -246,6 +247,7 @@ class DebtTokenProcessor(TokenProcessor, Protocol):
             event_data: The burn event data
             previous_balance: The user's balance before this event
             previous_index: The index at previous_balance calculation
+            scaled_delta: Pre-calculated scaled amount for V4+ revisions
 
         Returns:
             BurnResult with balance_delta and new_index

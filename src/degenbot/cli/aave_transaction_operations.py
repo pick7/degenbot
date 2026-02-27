@@ -17,6 +17,45 @@ from web3.types import LogReceipt
 
 from degenbot.checksum_cache import get_checksum_address
 
+
+def _topic_to_address(topic: HexBytes | str) -> ChecksumAddress:
+    """Extract Ethereum address from event topic.
+
+    Handles both HexBytes objects (from web3.py) and hex strings (from JSON).
+    The address is the last 40 hex characters (20 bytes) of the topic.
+
+    Args:
+        topic: Event topic as HexBytes or hex string (e.g., "0x000...d322a490...")
+
+    Returns:
+        ChecksumAddress: The extracted address
+    """
+    if isinstance(topic, str):
+        # Already a hex string, extract last 40 chars
+        return get_checksum_address("0x" + topic[-40:])
+    # HexBytes object, call .hex() method
+    return get_checksum_address("0x" + topic.hex()[-40:])
+
+
+def _decode_hex_data(data: str | HexBytes) -> bytes:
+    """Convert hex string (with or without 0x prefix) to bytes."""
+    if isinstance(data, (HexBytes, bytes)):
+        return bytes(data)
+    if isinstance(data, str) and data.startswith("0x"):
+        data = data[2:]
+    return bytes.fromhex(data)
+
+
+def _get_topic_str(topic: HexBytes | str) -> str:
+    """Convert topic to hex string without 0x prefix.
+
+    Handles both HexBytes objects (from web3.py) and hex strings (from JSON).
+    """
+    if isinstance(topic, str):
+        return topic.lstrip("0x")
+    return topic.hex()
+
+
 # ============================================================================
 # ENUMS AND CONSTANTS
 # ============================================================================
@@ -334,10 +373,20 @@ class TransactionValidationError(Exception):
             return "Transfer"
         return "UNKNOWN"
 
-    def _try_decode_address(self, topic: HexBytes) -> ChecksumAddress | None:
-        """Try to decode topic as address."""
+    def _try_decode_address(self, topic: HexBytes | str) -> ChecksumAddress | None:
+        """Try to decode topic as address.
+
+        Handles both HexBytes objects (with .hex() method) and strings.
+        """
         try:
-            return get_checksum_address("0x" + topic.hex()[-40:])
+            # Handle both HexBytes (has .hex() method) and strings
+            if isinstance(topic, str):
+                # Already a hex string, extract last 40 chars
+                hex_str = topic[-40:]
+            else:
+                # HexBytes object, call .hex() method
+                hex_str = topic.hex()[-40:]
+            return get_checksum_address("0x" + hex_str)
         except Exception:
             return None
 
@@ -472,15 +521,16 @@ class TransactionOperationsParser:
     def _extract_pool_events(self, events: list[LogReceipt]) -> list[LogReceipt]:
         """Extract pool-level events (SUPPLY, WITHDRAW, etc.)."""
         pool_topics = {
-            AaveV3Event.SUPPLY.value,
-            AaveV3Event.WITHDRAW.value,
-            AaveV3Event.BORROW.value,
-            AaveV3Event.REPAY.value,
-            AaveV3Event.LIQUIDATION_CALL.value,
-            AaveV3Event.DEFICIT_CREATED.value,
+            AaveV3Event.SUPPLY.value.hex(),
+            AaveV3Event.WITHDRAW.value.hex(),
+            AaveV3Event.BORROW.value.hex(),
+            AaveV3Event.REPAY.value.hex(),
+            AaveV3Event.LIQUIDATION_CALL.value.hex(),
+            AaveV3Event.DEFICIT_CREATED.value.hex(),
         }
+
         return sorted(
-            [e for e in events if e["topics"][0] in pool_topics],
+            [e for e in events if _get_topic_str(e["topics"][0]) in pool_topics],
             key=lambda e: e["logIndex"],
         )
 
@@ -489,24 +539,24 @@ class TransactionOperationsParser:
         result = []
 
         for event in events:
-            topic = event["topics"][0]
+            topic = _get_topic_str(event["topics"][0])
 
-            if topic == AaveV3Event.SCALED_TOKEN_MINT.value:
+            if topic == AaveV3Event.SCALED_TOKEN_MINT.value.hex():
                 ev = self._decode_mint_event(event)
                 if ev:
                     result.append(ev)
 
-            elif topic == AaveV3Event.SCALED_TOKEN_BURN.value:
+            elif topic == AaveV3Event.SCALED_TOKEN_BURN.value.hex():
                 ev = self._decode_burn_event(event)
                 if ev:
                     result.append(ev)
 
-            elif topic == AaveV3Event.SCALED_TOKEN_BALANCE_TRANSFER.value:
+            elif topic == AaveV3Event.SCALED_TOKEN_BALANCE_TRANSFER.value.hex():
                 ev = self._decode_balance_transfer_event(event)
                 if ev:
                     result.append(ev)
 
-            elif topic == TRANSFER_TOPIC:
+            elif topic == TRANSFER_TOPIC.hex():
                 # Handle ERC20 Transfer events for aTokens and vTokens
                 ev = self._decode_transfer_event(event)
                 if ev:
@@ -517,10 +567,11 @@ class TransactionOperationsParser:
     def _decode_mint_event(self, event: LogReceipt) -> ScaledTokenEvent | None:
         """Decode a Mint event."""
         try:
-            caller = get_checksum_address("0x" + event["topics"][1].hex()[-40:])
-            user = get_checksum_address("0x" + event["topics"][2].hex()[-40:])
+            caller = _topic_to_address(event["topics"][1])
+            user = _topic_to_address(event["topics"][2])
+            # Convert hex string to bytes for eth_abi.decode
             amount, balance_increase, index = decode(
-                ["uint256", "uint256", "uint256"], event["data"]
+                ["uint256", "uint256", "uint256"], _decode_hex_data(event["data"])
             )
 
             # Determine event type based on token type
@@ -555,10 +606,10 @@ class TransactionOperationsParser:
     def _decode_burn_event(self, event: LogReceipt) -> ScaledTokenEvent | None:
         """Decode a Burn event."""
         try:
-            from_addr = get_checksum_address("0x" + event["topics"][1].hex()[-40:])
-            target = get_checksum_address("0x" + event["topics"][2].hex()[-40:])
+            from_addr = _topic_to_address(event["topics"][1])
+            target = _topic_to_address(event["topics"][2])
             amount, balance_increase, index = decode(
-                ["uint256", "uint256", "uint256"], event["data"]
+                ["uint256", "uint256", "uint256"], _decode_hex_data(event["data"])
             )
 
             # Determine event type based on token type
@@ -597,10 +648,10 @@ class TransactionOperationsParser:
         During liquidations, collateral may be transferred to the treasury instead of burned.
         """
         try:
-            from_addr = get_checksum_address("0x" + event["topics"][1].hex()[-40:])
-            to_addr = get_checksum_address("0x" + event["topics"][2].hex()[-40:])
+            from_addr = _topic_to_address(event["topics"][1])
+            to_addr = _topic_to_address(event["topics"][2])
             # BalanceTransfer data: amount, index
-            amount, index = decode(["uint256", "uint256"], event["data"])
+            amount, index = decode(["uint256", "uint256"], _decode_hex_data(event["data"]))
 
             # Determine event type based on token type
             token_address = get_checksum_address(event["address"])
@@ -639,10 +690,10 @@ class TransactionOperationsParser:
         are transferred between users (e.g., user -> aggregator).
         """
         try:
-            from_addr = get_checksum_address("0x" + event["topics"][1].hex()[-40:])
-            to_addr = get_checksum_address("0x" + event["topics"][2].hex()[-40:])
+            from_addr = _topic_to_address(event["topics"][1])
+            to_addr = _topic_to_address(event["topics"][2])
             # Transfer data: amount
-            (amount,) = decode(["uint256"], event["data"])
+            (amount,) = decode(["uint256"], _decode_hex_data(event["data"]))
 
             # Determine event type based on token type
             token_address = get_checksum_address(event["address"])
@@ -682,29 +733,29 @@ class TransactionOperationsParser:
         assigned_indices: set[int],
     ) -> Operation | None:
         """Create operation starting from a pool event."""
-        topic = pool_event["topics"][0]
+        topic = _get_topic_str(pool_event["topics"][0])
 
-        if topic == AaveV3Event.SUPPLY.value:
+        if topic == AaveV3Event.SUPPLY.value.hex():
             return self._create_supply_operation(
                 operation_id, pool_event, scaled_events, all_events, assigned_indices
             )
-        if topic == AaveV3Event.WITHDRAW.value:
+        if topic == AaveV3Event.WITHDRAW.value.hex():
             return self._create_withdraw_operation(
                 operation_id, pool_event, scaled_events, all_events, assigned_indices
             )
-        if topic == AaveV3Event.BORROW.value:
+        if topic == AaveV3Event.BORROW.value.hex():
             return self._create_borrow_operation(
                 operation_id, pool_event, scaled_events, all_events, assigned_indices
             )
-        if topic == AaveV3Event.REPAY.value:
+        if topic == AaveV3Event.REPAY.value.hex():
             return self._create_repay_operation(
                 operation_id, pool_event, scaled_events, all_events, assigned_indices
             )
-        if topic == AaveV3Event.LIQUIDATION_CALL.value:
+        if topic == AaveV3Event.LIQUIDATION_CALL.value.hex():
             return self._create_liquidation_operation(
                 operation_id, pool_event, scaled_events, all_events, assigned_indices
             )
-        if topic == AaveV3Event.DEFICIT_CREATED.value:
+        if topic == AaveV3Event.DEFICIT_CREATED.value.hex():
             return self._create_deficit_operation(
                 operation_id, pool_event, scaled_events, all_events, assigned_indices
             )
@@ -721,15 +772,21 @@ class TransactionOperationsParser:
     ) -> Operation:
         """Create SUPPLY operation."""
         # Decode SUPPLY event
+        # Supply(address indexed reserve, address user, address indexed onBehalfOf,
+        #        uint256 amount, uint16 indexed referralCode)
+        # topics[1] = reserve, topics[2] = onBehalfOf, topics[3] = referralCode
+        # data = (user [32 bytes], amount [32 bytes])
         reserve = self._decode_address(supply_event["topics"][1])
-        user = self._decode_address(supply_event["topics"][2])
-        caller, amount = decode(["address", "uint256"], supply_event["data"])
+        on_behalf_of = self._decode_address(supply_event["topics"][2])
+        user, amount = decode(["address", "uint256"], _decode_hex_data(supply_event["data"]))
 
         # Find collateral mint for this user
         # For SUPPLY: look for mints where value > balance_increase (standard deposit)
+        # Match on onBehalfOf (beneficiary) from the SUPPLY event, which corresponds
+        # to the user_address in the collateral mint event
         collateral_mint = None
         for ev in scaled_events:
-            if ev.event_type == "COLLATERAL_MINT" and ev.user_address == user:
+            if ev.event_type == "COLLATERAL_MINT" and ev.user_address == on_behalf_of:
                 if ev.event["logIndex"] not in assigned_indices:
                     # Only match mints that represent deposits (value > balance_increase)
                     # Mints where balance_increase > value are interest accrual for withdrawals
@@ -741,6 +798,7 @@ class TransactionOperationsParser:
 
         # Also look for matching Transfer events from zero address (ERC20 mint)
         # These represent the same supply operation
+        # Match on onBehalfOf (beneficiary) as the target of the transfer
         ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
         transfer_events = []
         if collateral_mint:
@@ -748,7 +806,7 @@ class TransactionOperationsParser:
                 if (
                     ev.event_type == "COLLATERAL_TRANSFER"
                     and ev.from_address == ZERO_ADDRESS
-                    and ev.target_address == user
+                    and ev.target_address == on_behalf_of
                     and ev.amount == collateral_mint.amount
                     and ev.event["address"] == collateral_mint.event["address"]
                     and ev.event["logIndex"] not in assigned_indices
@@ -777,12 +835,12 @@ class TransactionOperationsParser:
         # Decode WITHDRAW event
         reserve = self._decode_address(withdraw_event["topics"][1])
         user = self._decode_address(withdraw_event["topics"][2])
-        (amount,) = decode(["uint256"], withdraw_event["data"])
+        (amount,) = decode(["uint256"], _decode_hex_data(withdraw_event["data"]))
 
         # Find collateral burn for this user
         collateral_burn = None
         for ev in scaled_events:
-            if ev.event_type == "COLLATERAL_BURN" and ev.user_address == user:
+            if ev.event_type in {"COLLATERAL_BURN", "UNKNOWN_BURN"} and ev.user_address == user:
                 if ev.event["logIndex"] not in assigned_indices:
                     collateral_burn = ev
                     break
@@ -903,7 +961,7 @@ class TransactionOperationsParser:
         # Decode REPAY event
         reserve = self._decode_address(repay_event["topics"][1])
         user = self._decode_address(repay_event["topics"][2])
-        amount, use_a_tokens = decode(["uint256", "bool"], repay_event["data"])
+        amount, use_a_tokens = decode(["uint256", "bool"], _decode_hex_data(repay_event["data"]))
 
         is_gho = reserve == GHO_TOKEN_ADDRESS
 
@@ -919,7 +977,7 @@ class TransactionOperationsParser:
                         debt_burn = ev
                         break
             else:
-                if ev.event_type == "DEBT_BURN":
+                if ev.event_type in {"DEBT_BURN", "UNKNOWN_BURN"}:
                     if ev.user_address == user:
                         debt_burn = ev
                         break
@@ -1015,7 +1073,7 @@ class TransactionOperationsParser:
                 continue
 
             if (is_gho and ev.event_type == "GHO_DEBT_BURN") or (
-                not is_gho and ev.event_type == "DEBT_BURN"
+                not is_gho and ev.event_type in {"DEBT_BURN", "UNKNOWN_BURN"}
             ):
                 if ev.user_address == user:
                     debt_burn = ev
@@ -1029,7 +1087,7 @@ class TransactionOperationsParser:
             if ev.event["logIndex"] in assigned_indices:
                 continue
 
-            if ev.event_type == "COLLATERAL_BURN":
+            if ev.event_type in {"COLLATERAL_BURN", "UNKNOWN_BURN"}:
                 if ev.user_address == user and not collateral_burn:
                     collateral_burn = ev
             elif ev.event_type == "COLLATERAL_TRANSFER":
@@ -1147,6 +1205,9 @@ class TransactionOperationsParser:
         When an ERC20 Transfer event exists for the same interest (from ZERO_ADDRESS),
         it is paired with the Mint event to avoid double-counting.
 
+        Also handles unassigned debt burn events to ensure debt balances are properly
+        reduced when burn events don't match REPAY operations (e.g., flash loans).
+
         Args:
             scaled_events: All scaled token events from the transaction
             assigned_indices: Set of log indices already assigned to operations
@@ -1174,6 +1235,23 @@ class TransactionOperationsParser:
         for ev in scaled_events:
             # Skip already assigned events
             if ev.event["logIndex"] in assigned_indices or ev.event["logIndex"] in local_assigned:
+                continue
+
+            # Handle unassigned debt burn events
+            # These can occur in flash loans or other edge cases where a burn
+            # doesn't match a REPAY operation but should still reduce debt
+            if ev.event_type in {"DEBT_BURN", "GHO_DEBT_BURN"}:
+                operations.append(
+                    Operation(
+                        operation_id=operation_id,
+                        operation_type=OperationType.INTEREST_ACCRUAL,
+                        pool_event=None,
+                        scaled_token_events=[ev],
+                        transfer_events=[],
+                        balance_transfer_events=[],
+                    )
+                )
+                operation_id += 1
                 continue
 
             # Only process mint events that represent interest accrual
@@ -1691,9 +1769,9 @@ class TransactionOperationsParser:
 
         return errors
 
-    def _decode_address(self, topic: HexBytes) -> ChecksumAddress:
+    def _decode_address(self, topic: HexBytes | str) -> ChecksumAddress:
         """Decode topic as address."""
-        return get_checksum_address("0x" + topic.hex()[-40:])
+        return _topic_to_address(topic)
 
 
 # ============================================================================
