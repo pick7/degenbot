@@ -15,9 +15,10 @@ Common operations you can perform with cast:
 |------|---------|
 | Check ETH balance | `cast balance <address> --ether` |
 | Read contract state | `cast call <contract> <function_sig>` |
-| Send a transaction | `cast send <to> <sig> [args...]` |
+| Read proxy contract implementation address | `cast implementation <contract>` |
 | Query ERC20 balance | `cast erc20-token balance <token> <owner>` |
 | Get transaction receipt | `cast receipt <tx_hash>` |
+| Get transaction trace | `cast run <tx_hash>` |
 | Get latest block number | `cast block-number` |
 | Convert wei to ETH | `cast from-wei <value>` |
 | ABI encode function call | `cast calldata <sig> [args...]` |
@@ -27,43 +28,33 @@ Common operations you can perform with cast:
 ### Reading Contract Data
 
 ```bash
-# Get the total supply of a token
-cast call 0xA0b86a33E6441E6C7D3D4B4f6c7E8F9a0B1c2D3e "totalSupply()"
+# Call a view function with no arguments
+cast call 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2 "decimals()"
 
-# Check balance of a specific address
-cast call 0xA0b86a33E6441E6C7D3D4B4f6c7E8F9a0B1c2D3e "balanceOf(address)" 0x742d35Cc6634C0532925a3b844Bc9e7595f6dEe
-```
-
-### Sending Transactions
-
-```bash
-# Send ETH to an address
-cast send 0x742d35Cc6634C0532925a3b844Bc9e7595f6dEe --value 0.1ether
-
-# Call a contract function that modifies state
-cast send 0xA0b86a33E6441E6C7D3D4B4f6c7E8F9a0B1c2D3e "transfer(address,uint256)" 0x742d35Cc6634C0532925a3b844Bc9e7595f6dEe 1000000000000000000
+# Call a view function with an argument
+cast call 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2 "balanceOf(address)" 0x000000000004444c5dc75cB358380D2e3dE08A90
 ```
 
 ### Working with ERC20 Tokens
 
 ```bash
-# Get token balance
-cast erc20-token balance 0xA0b86a33E6441E6C7D3D4B4f6c7E8F9a0B1c2D3e 0x742d35Cc6634C0532925a3b844Bc9e7595f6dEe
+# Get WETH (0xC02a...6Cc2) token balance for Uniswap V4 Pool Manager (0x0000...8A90)
+cast erc20-token balance 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2 0x000000000004444c5dc75cB358380D2e3dE08A90
 
 # Get token metadata
-cast erc20-token name 0xA0b86a33E6441E6C7D3D4B4f6c7E8F9a0B1c2D3e
-cast erc20-token symbol 0xA0b86a33E6441E6C7D3D4B4f6c7E8F9a0B1c2D3e
-cast erc20-token decimals 0xA0b86a33E6441E6C7D3D4B4f6c7E8F9a0B1c2D3e
+cast erc20-token name 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2
+cast erc20-token symbol 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2
+cast erc20-token decimals 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2
 ```
 
 ### Encoding and Decoding Data
 
 ```bash
 # Encode function call data
-cast calldata "transfer(address,uint256)" 0x742d35Cc6634C0532925a3b844Bc9e7595f6dEe 1000000000000000000
+cast calldata "transfer(address,uint256)" 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2 1000000000000000000
 
 # Decode transaction input
-cast decode-calldata "transfer(address,uint256)" 0xa9059cbb000000000000000000000000...
+cast decode-calldata "transfer(address,uint256)" '0xa9059cbb000000000000000000000000c02aaa39b223fe8d0a0e5c4f27ead9083c756cc20000000000000000000000000000000000000000000000000de0b6b3a7640000'
 
 # Get function selector
 cast sig "transfer(address,uint256)"
@@ -89,7 +80,7 @@ The cast command provides many subcommands organized by purpose:
 When a `cast` subcommand requires an RPC URL (e.g., for blockchain queries or contract interactions), determine the appropriate URL as follows:
 
 **Lookup the RPC URL in the config file:**
-- File location: `.opencode/rpc-config.json`
+- Filename: `rpc-config.json`
 - This JSON file maps chain names and IDs to their RPC endpoints
 
 **Example config structure:**
