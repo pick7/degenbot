@@ -1640,15 +1640,74 @@ def _get_or_create_collateral_position(
     session: Session,
     user: AaveV3UsersTable,
     asset_id: int,
+    token_address: ChecksumAddress | None = None,
+    w3: Web3 | None = None,
+    block_number: int | None = None,
 ) -> AaveV3CollateralPositionsTable:
-    """Get existing collateral position or create new one with zero balance."""
-    return _get_or_create_position(
-        session=session,
-        user=user,
+    """Get existing collateral position or create new one.
+
+    When token_address, w3, and block_number are provided, initializes the position
+    with the on-chain balance at the previous block. This handles users (including
+    treasury) who have existing positions that were established before we started tracking.
+    """
+    # Check if position already exists
+    for position in user.collateral_positions:
+        if position.asset_id == asset_id:
+            return position
+
+    # Position doesn't exist - fetch on-chain balance before creating
+    on_chain_balance = 0
+    if token_address is not None and w3 is not None and block_number is not None:
+        try:
+            (on_chain_balance,) = raw_call(
+                w3=w3,
+                address=token_address,
+                calldata=encode_function_calldata(
+                    function_prototype="scaledBalanceOf(address)",
+                    function_arguments=[user.address],
+                ),
+                return_types=["uint256"],
+                block_identifier=block_number - 1,
+            )
+            if on_chain_balance > 0:
+                logger.debug(
+                    f"Initializing new collateral position for user {user.address} "
+                    f"asset_id={asset_id} with on-chain balance {on_chain_balance}"
+                )
+        except (ValueError, RuntimeError, ContractLogicError) as e:
+            # If we can't verify, log warning but continue with 0 balance
+            logger.warning(
+                f"Could not fetch on-chain balance for user {user.address} "
+                f"at block {block_number - 1}: {e}"
+            )
+
+    # Also fetch the last_index for proper interest accrual
+    last_index = None
+    if token_address is not None and w3 is not None and block_number is not None:
+        try:
+            (last_index,) = raw_call(
+                w3=w3,
+                address=token_address,
+                calldata=encode_function_calldata(
+                    function_prototype="getPreviousIndex(address)",
+                    function_arguments=[user.address],
+                ),
+                return_types=["uint256"],
+                block_identifier=block_number - 1,
+            )
+        except (ValueError, RuntimeError, ContractLogicError):
+            last_index = None
+
+    # Create new position with on-chain balance and index (or 0/None if unavailable)
+    new_position = AaveV3CollateralPositionsTable(
+        user_id=user.id,
         asset_id=asset_id,
-        positions=user.collateral_positions,
-        position_table=AaveV3CollateralPositionsTable,
+        balance=on_chain_balance,
+        last_index=last_index,
     )
+    session.add(new_position)
+    user.collateral_positions.append(new_position)
+    return new_position
 
 
 def _get_or_create_debt_position(
@@ -2612,18 +2671,23 @@ def _process_operation(
             operation=operation,
         )
 
-        # Special handling for MINT_TO_TREASURY operations
-        # These don't have pool events, so we skip matching and process directly
-        # MINT_TO_TREASURY operations represent protocol reserves being minted
-        # to the treasury address. These should not update the treasury's
-        # collateral position balance since they are not user deposits.
-        if operation.operation_type == OperationType.MINT_TO_TREASURY:
-            # Skip processing MINT_TO_TREASURY events - they represent protocol
-            # reserves being minted to the treasury, not user collateral positions
-            continue
-
         # Find match within operation context
         match_result = matcher.find_match(scaled_event)
+
+        # Handle MINT_TO_TREASURY operations specially - they don't have pool events
+        # so we process them directly without matching
+        if match_result is None and operation.operation_type == OperationType.MINT_TO_TREASURY:
+            if scaled_event.event_type == "COLLATERAL_MINT":
+                _process_collateral_mint_with_match(
+                    context=context,
+                    scaled_event=scaled_event,
+                    match_result={
+                        "pool_event": None,
+                        "extraction_data": {},
+                        "should_consume": False,
+                    },
+                )
+            continue
 
         if match_result is None:
             msg = f"No match for {scaled_event.event_type} in operation {operation.operation_id}"
@@ -2710,6 +2774,9 @@ def _process_collateral_mint_with_match(
         session=context.session,
         user=user,
         asset_id=collateral_asset.id,
+        token_address=token_address,
+        w3=context.w3,
+        block_number=scaled_event.event["blockNumber"],
     )
 
     # Calculate scaled amount using PoolProcessor for revision 4+
@@ -2785,6 +2852,9 @@ def _process_collateral_burn_with_match(
         session=context.session,
         user=user,
         asset_id=collateral_asset.id,
+        token_address=token_address,
+        w3=context.w3,
+        block_number=scaled_event.event["blockNumber"],
     )
 
     # Calculate scaled amount using PoolProcessor for revision 4+
@@ -3114,6 +3184,9 @@ def _process_collateral_transfer_with_match(
         session=context.session,
         user=sender,
         asset_id=collateral_asset.id,
+        token_address=token_address,
+        w3=context.w3,
+        block_number=scaled_event.event["blockNumber"],
     )
 
     # Determine transfer amount
@@ -3146,43 +3219,21 @@ def _process_collateral_transfer_with_match(
     # Standalone ERC20 Transfer without BalanceTransfer event
     # Need to scale the amount using the current liquidity index
     elif collateral_asset.a_token_revision >= 4:
-        # Special case: liquidation fee transfers to treasury should use raw amount
-        treasury_address = get_checksum_address("0x464C71f6c2F760DdA6093dCB91C24c39e5d6e18c")
-        if (
-            scaled_event.target_address == treasury_address
-            and context.operation
-            and context.operation.operation_type == OperationType.LIQUIDATION
-        ):
-            # Use raw amount for liquidation fee transfers to treasury
-            transfer_amount = scaled_event.amount
-            transfer_index = int(collateral_asset.liquidity_index)
-        else:
-            pool_processor = PoolProcessorFactory.get_pool_processor_for_token_revision(
-                collateral_asset.a_token_revision
-            )
-            # Get liquidity index from the asset's reserve data
-            liquidity_index = int(collateral_asset.liquidity_index)
-            transfer_amount = pool_processor.calculate_collateral_transfer_scaled_amount(
-                amount=scaled_event.amount,
-                liquidity_index=liquidity_index,
-            )
-            transfer_index = liquidity_index
+        pool_processor = PoolProcessorFactory.get_pool_processor_for_token_revision(
+            collateral_asset.a_token_revision
+        )
+        # Get liquidity index from the asset's reserve data
+        liquidity_index = int(collateral_asset.liquidity_index)
+        transfer_amount = pool_processor.calculate_collateral_transfer_scaled_amount(
+            amount=scaled_event.amount,
+            liquidity_index=liquidity_index,
+        )
+        transfer_index = liquidity_index
     else:
         # Revision 1-3: standard ray_div using asset's liquidity index
-        # Special case: liquidation fee transfers to treasury should use raw amount
-        treasury_address = get_checksum_address("0x464C71f6c2F760DdA6093dCB91C24c39e5d6e18c")
-        if (
-            scaled_event.target_address == treasury_address
-            and context.operation
-            and context.operation.operation_type == OperationType.LIQUIDATION
-        ):
-            # Use raw amount for liquidation fee transfers to treasury
-            transfer_amount = scaled_event.amount
-            transfer_index = int(collateral_asset.liquidity_index)
-        else:
-            liquidity_index = int(collateral_asset.liquidity_index)
-            transfer_amount = scaled_event.amount * liquidity_index // 10**27
-            transfer_index = liquidity_index
+        liquidity_index = int(collateral_asset.liquidity_index)
+        transfer_amount = scaled_event.amount * liquidity_index // 10**27
+        transfer_index = liquidity_index
 
     # Update sender's balance
     sender_position.balance -= transfer_amount
@@ -3190,14 +3241,8 @@ def _process_collateral_transfer_with_match(
     if transfer_index > 0:
         sender_position.last_index = transfer_index
 
-    # Handle recipient (if not treasury)
-    # The treasury (0x464C71f6c2F760DdA6093dCB91C24c39e5d6e18c) receives liquidation fees
-    # and protocol reserves, but should not have its collateral position tracked
-    treasury_address = get_checksum_address("0x464C71f6c2F760DdA6093dCB91C24c39e5d6e18c")
-    if (
-        scaled_event.target_address != ZERO_ADDRESS
-        and scaled_event.target_address != treasury_address
-    ):
+    # Handle recipient
+    if scaled_event.target_address != ZERO_ADDRESS:
         recipient = _get_or_create_user(
             context=context,
             market=context.market,
@@ -3210,6 +3255,9 @@ def _process_collateral_transfer_with_match(
             session=context.session,
             user=recipient,
             asset_id=collateral_asset.id,
+            token_address=token_address,
+            w3=context.w3,
+            block_number=scaled_event.event["blockNumber"],
         )
         recipient_position.balance += transfer_amount
 
@@ -4188,12 +4236,6 @@ def _process_collateral_mint_event(
 
     reserve_address = get_checksum_address(collateral_asset.underlying_token.address)
 
-    # DEBUG: Log entry into collateral mint handler
-    print(
-        f"DEBUG COLLATERAL MINT: user={user.address}, "
-        f"event_amount={event_amount}, balance_increase={balance_increase}",
-        flush=True,
-    )
     logger.debug(
         f"_process_collateral_mint_event called: "
         f"user={user.address}, token={token_address}, reserve={reserve_address}, "
@@ -4327,7 +4369,12 @@ def _process_collateral_mint_event(
             )
 
     collateral_position = _get_or_create_collateral_position(
-        session=session, user=user, asset_id=collateral_asset.id
+        session=session,
+        user=user,
+        asset_id=collateral_asset.id,
+        token_address=token_address,
+        w3=tx_context.w3,
+        block_number=tx_context.block_number,
     )
 
     user_starting_amount = collateral_position.balance
@@ -5165,16 +5212,6 @@ def _process_standard_debt_burn_event(
 
     user_starting_amount = debt_position.balance
 
-    # Debug logging for liquidation burns
-    if pool_event_topic == AaveV3Event.LIQUIDATION_CALL.value:
-        print(
-            f"DEBUG LIQUIDATION BURN: user={user.address}, token={token_address}, "
-            f"starting_balance={user_starting_amount}, event_amount={event_amount}, "
-            f"balance_increase={balance_increase}, index={index}, "
-            f"scaled_amount={scaled_amount}",
-            flush=True,
-        )
-
     user_operation = _process_scaled_token_operation(
         event=DebtBurnEvent(
             from_=from_address,
@@ -5187,14 +5224,6 @@ def _process_standard_debt_burn_event(
         scaled_token_revision=debt_asset.v_token_revision,
         position=debt_position,
     )
-
-    if pool_event_topic == AaveV3Event.LIQUIDATION_CALL.value:
-        print(
-            f"DEBUG LIQUIDATION BURN AFTER: user={user.address}, "
-            f"ending_balance={debt_position.balance}, "
-            f"actual_delta={debt_position.balance - user_starting_amount}",
-            flush=True,
-        )
 
     if VerboseConfig.is_verbose(
         user_address=user.address, tx_hash=event_in_process["transactionHash"]
@@ -5388,7 +5417,12 @@ def _process_scaled_token_balance_transfer_event(
         )
     ) is None:
         to_user_position = _get_or_create_collateral_position(
-            session=context.session, user=to_user, asset_id=aave_asset.id
+            session=context.session,
+            user=to_user,
+            asset_id=aave_asset.id,
+            token_address=get_checksum_address(context.event["address"]),
+            w3=context.w3,
+            block_number=context.event["blockNumber"],
         )
 
     # Always update last_index (even for zero-amount transfers)
