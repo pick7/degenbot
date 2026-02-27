@@ -137,7 +137,3 @@ class TestTreasuryEventProcessing:
         pool_address = get_checksum_address("0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2")
         assert pool_address is not None
         assert len(pool_address) == 42
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])

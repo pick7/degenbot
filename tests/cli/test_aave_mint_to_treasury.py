@@ -470,7 +470,3 @@ class TestMintToTreasury:
         assert len(liquidation_ops) == 1, (
             f"Expected 1 LIQUIDATION operation, got {len(liquidation_ops)}"
         )
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
