@@ -4840,19 +4840,10 @@ def _process_gho_debt_mint_event(
 
     # Apply the calculated balance delta
     debt_position.balance += gho_result.balance_delta
-    # Always fetch the current global index from the contract.
-    # The asset's cached borrow_index may be stale (from a previous block).
-    # The event's index is the user's cached lastIndex, not the current global index.
-    pool_contract = _get_contract(market=context.market, contract_name="POOL")
-    fetched_index = _get_current_borrow_index_from_pool(
-        w3=context.w3,
-        pool_address=get_checksum_address(pool_contract.address),
-        underlying_asset_address=get_checksum_address(debt_asset.underlying_token.address),
-        block_number=context.event["blockNumber"],
-    )
-    # Use fetched index if available, otherwise fall back to event index
-    current_index = fetched_index if fetched_index is not None else index
-    debt_position.last_index = current_index
+    # Use the new_index from the processor result, which is the event's index.
+    # The processor already extracts the correct index from the Mint event.
+    # The event's index is the current global index at the time of the Mint.
+    debt_position.last_index = gho_result.new_index
 
     # Map GHO user operation to CLI user operation enum
     user_operation = UserOperation(gho_result.user_operation.value)
@@ -4878,7 +4869,7 @@ def _process_gho_debt_mint_event(
             has_discount_rate_strategy=discount_rate_strategy is not None,
             discount_token_balance=discount_token_balance,
             scaled_debt_balance=debt_position.balance,
-            debt_index=current_index,
+            debt_index=gho_result.new_index,
             wad_ray_math=wad_ray_math,
         )
 
