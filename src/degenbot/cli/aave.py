@@ -1813,6 +1813,43 @@ def _get_asset_by_token_type(
     return None
 
 
+def _get_current_borrow_index_from_pool(
+    w3: Web3,
+    pool_address: ChecksumAddress,
+    underlying_asset_address: ChecksumAddress,
+    block_number: int,
+) -> int | None:
+    """
+    Fetch the current borrow index from the Aave Pool contract.
+
+    This is used when the asset's cached borrow_index is 0 (not yet updated
+    by a ReserveDataUpdated event) to get the current global index.
+
+    Args:
+        w3: Web3 instance
+        pool_address: The Aave Pool contract address
+        underlying_asset_address: The underlying asset address (e.g., GHO token)
+        block_number: The block number to query at
+
+    Returns:
+        The current borrow index, or None if the call fails
+    """
+    try:
+        (borrow_index,) = raw_call(
+            w3=w3,
+            address=pool_address,
+            calldata=encode_function_calldata(
+                function_prototype="getReserveNormalizedVariableDebt(address)",
+                function_arguments=[underlying_asset_address],
+            ),
+            return_types=["uint256"],
+            block_identifier=block_number,
+        )
+        return borrow_index
+    except (ValueError, RuntimeError, ContractLogicError):
+        return None
+
+
 def _verify_gho_discount_amounts(
     *,
     w3: Web3,
@@ -2435,9 +2472,34 @@ def _process_transaction_with_context(
         return
 
     # Process all events in chronological order (legacy path)
+    # First, process ReserveDataUpdated events to ensure asset indices are up-to-date
+    # before processing Burn/Mint events. This is critical because the Aave contract
+    # emits Burn/Mint events with stale indices, but we need the current global index
+    # for accurate last_index tracking.
+    # See debug/aave/0008 for details on this index synchronization issue.
+    for event in tx_context.events:
+        topic = event["topics"][0]
+        if topic == AaveV3Event.RESERVE_DATA_UPDATED.value:
+            event_address = get_checksum_address(event["address"])
+            context = EventHandlerContext(
+                w3=w3,
+                event=event,
+                market=market,
+                session=session,
+                gho_asset=gho_asset,
+                contract_address=event_address,
+                tx_context=tx_context,
+            )
+            _process_reserve_data_update_event(context)
+
+    # Second pass: Process all other events
     for event in tx_context.events:
         topic = event["topics"][0]
         event_address = get_checksum_address(event["address"])
+
+        # Skip ReserveDataUpdated events - already processed in first pass
+        if topic == AaveV3Event.RESERVE_DATA_UPDATED.value:
+            continue
 
         context = EventHandlerContext(
             w3=w3,
@@ -2464,8 +2526,6 @@ def _process_transaction_with_context(
             _process_scaled_token_balance_transfer_event(context)
         elif topic == AaveV3Event.USER_E_MODE_SET.value:
             _process_user_e_mode_set_event(context)
-        elif topic == AaveV3Event.RESERVE_DATA_UPDATED.value:
-            _process_reserve_data_update_event(context)
         elif topic == AaveV3Event.UPGRADED.value:
             _process_scaled_token_upgrade_event(context)
         elif topic == AaveV3Event.DISCOUNT_RATE_STRATEGY_UPDATED.value:
@@ -3040,9 +3100,21 @@ def _process_debt_mint_with_match(
             previous_discount=effective_discount,
         )
 
-        # Apply the calculated balance delta and update index
+        # Apply the calculated balance delta
         debt_position.balance += gho_result.balance_delta
-        debt_position.last_index = gho_result.new_index
+        # Always fetch the current global index from the contract.
+        # The asset's cached borrow_index may be stale (from a previous block).
+        # The event's index is the user's cached lastIndex, not the current global index.
+        pool_contract = _get_contract(market=context.market, contract_name="POOL")
+        fetched_index = _get_current_borrow_index_from_pool(
+            w3=context.w3,
+            pool_address=get_checksum_address(pool_contract.address),
+            underlying_asset_address=get_checksum_address(debt_asset.underlying_token.address),
+            block_number=scaled_event.event["blockNumber"],
+        )
+        # Use fetched index if available, otherwise fall back to event index
+        current_index = fetched_index if fetched_index is not None else scaled_event.index
+        debt_position.last_index = current_index
 
         # Refresh discount if needed
         if (
@@ -3063,7 +3135,7 @@ def _process_debt_mint_with_match(
                 is not None,
                 discount_token_balance=discount_token_balance,
                 scaled_debt_balance=debt_position.balance,
-                debt_index=scaled_event.index,
+                debt_index=current_index,
                 wad_ray_math=gho_processor.get_math_libraries()["wad_ray"],
             )
     else:
@@ -3081,9 +3153,19 @@ def _process_debt_mint_with_match(
             position=debt_position,
         )
 
-        # Update last_index
-        if scaled_event.index > 0:
-            debt_position.last_index = scaled_event.index
+        # Always fetch the current global index from the contract.
+        # The asset's cached borrow_index may be stale (from a previous block).
+        # The event's index is the user's cached lastIndex, not the current global index.
+        pool_contract = _get_contract(market=context.market, contract_name="POOL")
+        fetched_index = _get_current_borrow_index_from_pool(
+            w3=context.w3,
+            pool_address=get_checksum_address(pool_contract.address),
+            underlying_asset_address=get_checksum_address(debt_asset.underlying_token.address),
+            block_number=scaled_event.event["blockNumber"],
+        )
+        # Use fetched index if available, otherwise fall back to event index
+        current_index = fetched_index if fetched_index is not None else scaled_event.index
+        debt_position.last_index = current_index
 
 
 def _process_debt_burn_with_match(
@@ -3178,9 +3260,21 @@ def _process_debt_burn_with_match(
             previous_discount=effective_discount,
         )
 
-        # Apply the calculated balance delta and update index
+        # Apply the calculated balance delta
         debt_position.balance += gho_result.balance_delta
-        debt_position.last_index = gho_result.new_index
+        # Always fetch the current global index from the contract.
+        # The asset's cached borrow_index may be stale (from a previous block).
+        # The event's index is the user's cached lastIndex, not the current global index.
+        pool_contract = _get_contract(market=context.market, contract_name="POOL")
+        fetched_index = _get_current_borrow_index_from_pool(
+            w3=context.w3,
+            pool_address=get_checksum_address(pool_contract.address),
+            underlying_asset_address=get_checksum_address(debt_asset.underlying_token.address),
+            block_number=scaled_event.event["blockNumber"],
+        )
+        # Use fetched index if available, otherwise fall back to event index
+        current_index = fetched_index if fetched_index is not None else scaled_event.index
+        debt_position.last_index = current_index
 
         # Refresh discount if needed
         if (
@@ -3201,7 +3295,7 @@ def _process_debt_burn_with_match(
                 is not None,
                 discount_token_balance=discount_token_balance,
                 scaled_debt_balance=debt_position.balance,
-                debt_index=scaled_event.index,
+                debt_index=current_index,
                 wad_ray_math=gho_processor.get_math_libraries()["wad_ray"],
             )
     else:
@@ -3219,9 +3313,19 @@ def _process_debt_burn_with_match(
             position=debt_position,
         )
 
-        # Update last_index
-        if scaled_event.index > 0:
-            debt_position.last_index = scaled_event.index
+        # Always fetch the current global index from the contract.
+        # The asset's cached borrow_index may be stale (from a previous block).
+        # The event's index is the user's cached lastIndex, not the current global index.
+        pool_contract = _get_contract(market=context.market, contract_name="POOL")
+        fetched_index = _get_current_borrow_index_from_pool(
+            w3=context.w3,
+            pool_address=get_checksum_address(pool_contract.address),
+            underlying_asset_address=get_checksum_address(debt_asset.underlying_token.address),
+            block_number=scaled_event.event["blockNumber"],
+        )
+        # Use fetched index if available, otherwise fall back to event index
+        current_index = fetched_index if fetched_index is not None else scaled_event.index
+        debt_position.last_index = current_index
 
     # Log liquidation match for debugging
     if aave_debug_logger.is_enabled() and context.operation is not None:
@@ -3547,6 +3651,32 @@ def _process_staked_aave_event(
 
     discount_token_info_event = accessory_events[0]
 
+    # Look up the asset to get the underlying token address
+    gho_asset = None
+    for asset in context.market.assets:
+        if asset.id == debt_position.asset_id:
+            gho_asset = asset
+            break
+    assert gho_asset is not None, (
+        f"Asset not found for debt_position.asset_id={debt_position.asset_id}"
+    )
+
+    # Fetch the current global borrow index from the Pool contract.
+    # The Mint event's index parameter is the user's cached lastIndex, which may be stale.
+    # The asset's cached borrow_index may also be stale (from a previous block).
+    # We need to query the Pool contract directly for the current global index.
+    pool_contract = _get_contract(market=context.market, contract_name="POOL")
+    fetched_index = _get_current_borrow_index_from_pool(
+        w3=context.w3,
+        pool_address=get_checksum_address(pool_contract.address),
+        underlying_asset_address=get_checksum_address(gho_asset.underlying_token.address),
+        block_number=context.event["blockNumber"],
+    )
+    # Use fetched index if available, otherwise fall back to cached asset index
+    current_global_index = (
+        fetched_index if fetched_index is not None else int(gho_asset.borrow_index)
+    )
+
     match discount_token_info_event["topics"][0]:
         case AaveV3Event.STAKED.value:
             return _process_aave_stake(
@@ -3558,6 +3688,7 @@ def _process_staked_aave_event(
                 scaled_token_revision=scaled_token_revision,
                 debt_position=debt_position,
                 triggering_event=discount_token_info_event,
+                current_index=current_global_index,
             )
         case AaveV3Event.REDEEM.value:
             return _process_aave_redeem(
@@ -3569,6 +3700,7 @@ def _process_staked_aave_event(
                 scaled_token_revision=scaled_token_revision,
                 debt_position=debt_position,
                 triggering_event=discount_token_info_event,
+                current_index=current_global_index,
             )
         case AaveV3Event.ERC20_TRANSFER.value:
             return _process_staked_aave_transfer(
@@ -3579,6 +3711,7 @@ def _process_staked_aave_event(
                 scaled_token_revision=scaled_token_revision,
                 debt_position=debt_position,
                 triggering_event=discount_token_info_event,
+                current_index=current_global_index,
             )
         case _:
             msg = "Should be unreachable"
@@ -3595,6 +3728,7 @@ def _process_aave_stake(
     scaled_token_revision: int,
     debt_position: AaveV3DebtPositionsTable,
     triggering_event: LogReceipt,
+    current_index: int,
 ) -> UserOperation:
     """
     Process a GHO vToken Mint event triggered by an AAVE staking event.
@@ -3659,18 +3793,20 @@ def _process_aave_stake(
         # (uint256 balanceIncrease, uint256 discountScaled) = _accrueDebtOnAction(...)
         # Use the OLD discount for interest accrual, matching contract behavior
         # Use stateless processor to calculate discount
+        # NOTE: Use current_index from the pool, not event_data.index which may be stale
         gho_processor = TokenProcessorFactory.get_gho_debt_processor(scaled_token_revision)
         recipient_discount_scaled = gho_processor.accrue_debt_on_action(
             previous_scaled_balance=recipient_previous_scaled_balance,
             previous_index=recipient_debt_position.last_index or 0,
             discount_percent=old_discount,
-            current_index=event_data.index,
+            current_index=current_index,
         )
 
         # _burn(recipient, discountScaled.toUint128()) # noqa:ERA001
         recipient_debt_position.balance -= recipient_discount_scaled
         recipient_new_scaled_balance = recipient_debt_position.balance
-        recipient_debt_position.last_index = event_data.index
+        # Use current global index, not the stale index from the Mint event
+        recipient_debt_position.last_index = current_index
 
         # Update the discount percentage for the new balance
         recipient_previous_discount_percent = old_discount
@@ -3691,7 +3827,7 @@ def _process_aave_stake(
                 has_discount_rate_strategy=discount_rate_strategy is not None,
                 discount_token_balance=recipient_new_discount_token_balance,
                 scaled_debt_balance=recipient_debt_position.balance,
-                debt_index=event_data.index,
+                debt_index=current_index,
                 wad_ray_math=gho_processor.get_math_libraries()["wad_ray"],
             )
         recipient_new_discount_percent = recipient.gho_discount
@@ -3722,6 +3858,7 @@ def _process_aave_redeem(
     scaled_token_revision: int,
     debt_position: AaveV3DebtPositionsTable,
     triggering_event: LogReceipt,
+    current_index: int,
 ) -> UserOperation:
     """
     Process a GHO vToken Mint event triggered by an AAVE redemption event.
@@ -3795,17 +3932,19 @@ def _process_aave_redeem(
         # (uint256 balanceIncrease, uint256 discountScaled) = _accrueDebtOnAction(...)
         # Use the OLD discount for interest accrual, matching contract behavior
         # Use stateless processor to calculate discount
+        # NOTE: Use current_index from the pool, not event_data.index which may be stale
         gho_processor = TokenProcessorFactory.get_gho_debt_processor(scaled_token_revision)
         sender_discount_scaled = gho_processor.accrue_debt_on_action(
             previous_scaled_balance=sender_previous_scaled_balance,
             previous_index=sender_debt_position.last_index or 0,
             discount_percent=old_discount,
-            current_index=event_data.index,
+            current_index=current_index,
         )
 
         # _burn(recipient, discountScaled.toUint128()) # noqa: ERA001
         sender_debt_position.balance -= sender_discount_scaled
-        sender_debt_position.last_index = event_data.index
+        # Use current global index, not the stale index from the Mint event
+        sender_debt_position.last_index = current_index
 
         sender_previous_discount_percent = old_discount
         # Skip discount refresh if there's a DiscountPercentUpdated event for sender
@@ -3817,7 +3956,7 @@ def _process_aave_redeem(
                 has_discount_rate_strategy=discount_rate_strategy is not None,
                 discount_token_balance=sender_discount_token_balance - requested_amount,
                 scaled_debt_balance=sender_debt_position.balance,
-                debt_index=event_data.index,
+                debt_index=current_index,
                 wad_ray_math=gho_processor.get_math_libraries()["wad_ray"],
             )
         sender_new_discount_percent = sender.gho_discount
@@ -3847,6 +3986,7 @@ def _process_staked_aave_transfer(
     scaled_token_revision: int,
     debt_position: AaveV3DebtPositionsTable,
     triggering_event: LogReceipt,
+    current_index: int,
 ) -> UserOperation:
     """
     Process a GHO vToken Mint event triggered by an stkAAVE transfer.
@@ -3976,17 +4116,19 @@ def _process_staked_aave_transfer(
         # (uint256 balanceIncrease, uint256 discountScaled) = _accrueDebtOnAction(...)
         # Use the OLD discount for interest accrual, matching contract behavior
         # Use stateless processor to calculate discount
+        # NOTE: Use current_index from the pool, not event_data.index which may be stale
         gho_processor = TokenProcessorFactory.get_gho_debt_processor(scaled_token_revision)
         sender_discount_scaled = gho_processor.accrue_debt_on_action(
             previous_scaled_balance=sender_previous_scaled_balance,
             previous_index=sender_debt_position.last_index or 0,
             discount_percent=sender_old_discount,
-            current_index=event_data.index,
+            current_index=current_index,
         )
 
         # _burn(sender, discountScaled.toUint128()) # noqa: ERA001
         sender_debt_position.balance -= sender_discount_scaled
-        sender_debt_position.last_index = event_data.index
+        # Use current global index, not the stale index from the Mint event
+        sender_debt_position.last_index = current_index
 
         sender_previous_discount_percent = sender_old_discount
         # Skip discount refresh if there's a DiscountPercentUpdated event for sender
@@ -3998,7 +4140,7 @@ def _process_staked_aave_transfer(
                 has_discount_rate_strategy=discount_rate_strategy is not None,
                 discount_token_balance=sender_discount_token_balance,
                 scaled_debt_balance=sender_debt_position.balance,
-                debt_index=event_data.index,
+                debt_index=current_index,
                 wad_ray_math=gho_processor.get_math_libraries()["wad_ray"],
             )
         sender_new_discount_percent = sender.gho_discount
@@ -4035,18 +4177,20 @@ def _process_staked_aave_transfer(
         # (uint256 balanceIncrease, uint256 discountScaled) = _accrueDebtOnAction(...)
         # Use the OLD discount for interest accrual, matching contract behavior
         # Use stateless processor to calculate discount
+        # NOTE: Use current_index from the pool, not event_data.index which may be stale
         gho_processor = TokenProcessorFactory.get_gho_debt_processor(scaled_token_revision)
         recipient_discount_scaled = gho_processor.accrue_debt_on_action(
             previous_scaled_balance=recipient_previous_scaled_balance,
             previous_index=recipient_debt_position.last_index or 0,
             discount_percent=recipient_old_discount,
-            current_index=event_data.index,
+            current_index=current_index,
         )
 
         # _burn(recipient, discountScaled.toUint128()) # noqa:ERA001
         recipient_debt_position.balance -= recipient_discount_scaled
         recipient_new_scaled_balance = recipient_debt_position.balance
-        recipient_debt_position.last_index = event_data.index
+        # Use current global index, not the stale index from the Mint event
+        recipient_debt_position.last_index = current_index
 
         recipient_previous_discount_percent = recipient_old_discount
         # Skip discount refresh if there's a DiscountPercentUpdated event for recipient,
@@ -4062,7 +4206,7 @@ def _process_staked_aave_transfer(
                 has_discount_rate_strategy=discount_rate_strategy is not None,
                 discount_token_balance=recipient_discount_token_balance,
                 scaled_debt_balance=recipient_new_scaled_balance,
-                debt_index=event_data.index,
+                debt_index=current_index,
                 wad_ray_math=gho_processor.get_math_libraries()["wad_ray"],
             )
         recipient_new_discount_percent = recipient.gho_discount
@@ -4694,9 +4838,21 @@ def _process_gho_debt_mint_event(
         previous_discount=effective_discount,
     )
 
-    # Apply the calculated balance delta and update index
+    # Apply the calculated balance delta
     debt_position.balance += gho_result.balance_delta
-    debt_position.last_index = gho_result.new_index
+    # Always fetch the current global index from the contract.
+    # The asset's cached borrow_index may be stale (from a previous block).
+    # The event's index is the user's cached lastIndex, not the current global index.
+    pool_contract = _get_contract(market=context.market, contract_name="POOL")
+    fetched_index = _get_current_borrow_index_from_pool(
+        w3=context.w3,
+        pool_address=get_checksum_address(pool_contract.address),
+        underlying_asset_address=get_checksum_address(debt_asset.underlying_token.address),
+        block_number=context.event["blockNumber"],
+    )
+    # Use fetched index if available, otherwise fall back to event index
+    current_index = fetched_index if fetched_index is not None else index
+    debt_position.last_index = current_index
 
     # Map GHO user operation to CLI user operation enum
     user_operation = UserOperation(gho_result.user_operation.value)
@@ -4722,7 +4878,7 @@ def _process_gho_debt_mint_event(
             has_discount_rate_strategy=discount_rate_strategy is not None,
             discount_token_balance=discount_token_balance,
             scaled_debt_balance=debt_position.balance,
-            debt_index=index,
+            debt_index=current_index,
             wad_ray_math=wad_ray_math,
         )
 
@@ -5207,9 +5363,21 @@ def _process_gho_debt_burn_event(
         previous_discount=effective_discount,
     )
 
-    # Apply the calculated balance delta and update index
+    # Apply the calculated balance delta
     debt_position.balance += gho_result.balance_delta
-    debt_position.last_index = gho_result.new_index
+    # Always fetch the current global index from the contract.
+    # The asset's cached borrow_index may be stale (from a previous block).
+    # The event's index is the user's cached lastIndex, not the current global index.
+    pool_contract = _get_contract(market=context.market, contract_name="POOL")
+    fetched_index = _get_current_borrow_index_from_pool(
+        w3=context.w3,
+        pool_address=get_checksum_address(pool_contract.address),
+        underlying_asset_address=get_checksum_address(debt_asset.underlying_token.address),
+        block_number=context.event["blockNumber"],
+    )
+    # Use fetched index if available, otherwise fall back to event index
+    current_index = fetched_index if fetched_index is not None else index
+    debt_position.last_index = current_index
 
     # GHO burn events are always REPAY operations
     user_operation = UserOperation.GHO_REPAY
@@ -5235,7 +5403,7 @@ def _process_gho_debt_burn_event(
             has_discount_rate_strategy=discount_rate_strategy is not None,
             discount_token_balance=discount_token_balance,
             scaled_debt_balance=debt_position.balance,
-            debt_index=index,
+            debt_index=current_index,
             wad_ray_math=wad_ray_math,
         )
 
