@@ -14,8 +14,8 @@ from eth_typing import ChecksumAddress
 from hexbytes import HexBytes
 from web3.types import LogReceipt
 
+from degenbot.aave.events import AaveV3PoolEvent
 from degenbot.cli.aave_event_matching import (
-    AaveV3Event,
     EventMatcher,
     ScaledTokenEventType,
 )
@@ -55,7 +55,7 @@ def create_supply_event(
     return LogReceipt({
         "address": "0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2",  # Pool
         "topics": [
-            AaveV3Event.SUPPLY.value,
+            AaveV3PoolEvent.SUPPLY.value,
             HexBytes("0x" + "0" * 24 + reserve[2:]),
             HexBytes("0x" + "0" * 24 + user[2:]),
             HexBytes("0x" + "0" * 24 + on_behalf_of[2:]),

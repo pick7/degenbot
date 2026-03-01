@@ -10,10 +10,10 @@ from hexbytes import HexBytes
 from web3.types import LogReceipt
 
 from degenbot.checksum_cache import get_checksum_address
+from degenbot.aave.events import AaveV3PoolEvent, AaveV3ScaledTokenEvent
 from degenbot.cli.aave_transaction_operations import (
     GHO_TOKEN_ADDRESS,
     GHO_VARIABLE_DEBT_TOKEN_ADDRESS,
-    AaveV3Event,
     OperationType,
     TransactionOperationsParser,
     TransactionValidationError,
@@ -38,7 +38,7 @@ class EventFactory:
         """Create a SUPPLY pool event."""
 
         topics = [
-            AaveV3Event.SUPPLY.value,
+            AaveV3PoolEvent.SUPPLY.value,
             HexBytes("0x" + "0" * 24 + reserve[2:]),
             HexBytes("0x" + "0" * 24 + user[2:]),
         ]
@@ -62,7 +62,7 @@ class EventFactory:
         """Create a WITHDRAW pool event."""
 
         topics = [
-            AaveV3Event.WITHDRAW.value,
+            AaveV3PoolEvent.WITHDRAW.value,
             HexBytes("0x" + "0" * 24 + reserve[2:]),
             HexBytes("0x" + "0" * 24 + user[2:]),
         ]
@@ -91,7 +91,7 @@ class EventFactory:
         """Create a LIQUIDATION_CALL pool event."""
 
         topics = [
-            AaveV3Event.LIQUIDATION_CALL.value,
+            AaveV3PoolEvent.LIQUIDATION_CALL.value,
             HexBytes("0x" + "0" * 24 + collateral_asset[2:]),
             HexBytes("0x" + "0" * 24 + debt_asset[2:]),
             HexBytes("0x" + "0" * 24 + user[2:]),
@@ -128,7 +128,7 @@ class EventFactory:
         """Create a REPAY pool event."""
 
         topics = [
-            AaveV3Event.REPAY.value,
+            AaveV3PoolEvent.REPAY.value,
             HexBytes("0x" + "0" * 24 + reserve[2:]),
             HexBytes("0x" + "0" * 24 + user[2:]),
         ]
@@ -156,7 +156,7 @@ class EventFactory:
         caller = get_checksum_address("0x" + "0" * 40)
 
         topics = [
-            AaveV3Event.SCALED_TOKEN_MINT.value,
+            AaveV3ScaledTokenEvent.MINT.value,
             HexBytes("0x" + "0" * 24 + caller[2:]),
             HexBytes("0x" + "0" * 24 + user[2:]),
         ]
@@ -184,7 +184,7 @@ class EventFactory:
         target = get_checksum_address("0x" + "0" * 40)
 
         topics = [
-            AaveV3Event.SCALED_TOKEN_BURN.value,
+            AaveV3ScaledTokenEvent.BURN.value,
             HexBytes("0x" + "0" * 24 + user[2:]),
             HexBytes("0x" + "0" * 24 + target[2:]),
         ]
@@ -212,7 +212,7 @@ class EventFactory:
         caller = get_checksum_address("0x" + "0" * 40)
 
         topics = [
-            AaveV3Event.SCALED_TOKEN_MINT.value,
+            AaveV3ScaledTokenEvent.MINT.value,
             HexBytes("0x" + "0" * 24 + caller[2:]),
             HexBytes("0x" + "0" * 24 + user[2:]),
         ]
@@ -240,7 +240,7 @@ class EventFactory:
         target = get_checksum_address("0x" + "0" * 40)
 
         topics = [
-            AaveV3Event.SCALED_TOKEN_BURN.value,
+            AaveV3ScaledTokenEvent.BURN.value,
             HexBytes("0x" + "0" * 24 + user[2:]),
             HexBytes("0x" + "0" * 24 + target[2:]),
         ]
@@ -268,7 +268,7 @@ class EventFactory:
         target = get_checksum_address("0x" + "0" * 40)
 
         topics = [
-            AaveV3Event.SCALED_TOKEN_BURN.value,
+            AaveV3ScaledTokenEvent.BURN.value,
             HexBytes("0x" + "0" * 24 + user[2:]),
             HexBytes("0x" + "0" * 24 + target[2:]),
         ]
@@ -294,7 +294,7 @@ class EventFactory:
         """Create a collateral BalanceTransfer event."""
 
         topics = [
-            AaveV3Event.SCALED_TOKEN_BALANCE_TRANSFER.value,
+            AaveV3ScaledTokenEvent.BALANCE_TRANSFER.value,
             HexBytes("0x" + "0" * 24 + from_user[2:]),
             HexBytes("0x" + "0" * 24 + to_user[2:]),
         ]

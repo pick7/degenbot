@@ -8,8 +8,8 @@ import pytest
 from hexbytes import HexBytes
 from web3.types import LogReceipt
 
+from degenbot.aave.events import AaveV3PoolEvent, AaveV3ScaledTokenEvent
 from degenbot.cli.aave_transaction_operations import (
-    AaveV3Event,
     OperationType,
     TransactionOperationsParser,
 )
@@ -214,7 +214,7 @@ class TestMintToTreasury:
         burn_event = {
             "address": aWETH,
             "topics": [
-                AaveV3Event.SCALED_TOKEN_BURN.value,
+                AaveV3ScaledTokenEvent.BURN.value,
                 HexBytes("0x" + "0" * 24 + LIQUIDATED_USER[2:]),
                 HexBytes("0x" + "0" * 24 + LIQUIDATOR[2:]),
             ],
@@ -258,7 +258,7 @@ class TestMintToTreasury:
         liquidation_event = {
             "address": POOL,
             "topics": [
-                AaveV3Event.LIQUIDATION_CALL.value,
+                AaveV3PoolEvent.LIQUIDATION_CALL.value,
                 HexBytes("0x" + "0" * 24 + WETH[2:]),  # collateralAsset
                 HexBytes("0x" + "0" * 24 + DAI[2:]),  # debtAsset
                 HexBytes("0x" + "0" * 24 + LIQUIDATED_USER[2:]),  # user
@@ -351,7 +351,7 @@ class TestMintToTreasury:
         burn_event = {
             "address": aWETH,
             "topics": [
-                AaveV3Event.SCALED_TOKEN_BURN.value,
+                AaveV3ScaledTokenEvent.BURN.value,
                 HexBytes("0x" + "0" * 24 + LIQUIDATED_USER[2:]),
                 HexBytes("0x" + "0" * 24 + LIQUIDATOR[2:]),
             ],
@@ -415,7 +415,7 @@ class TestMintToTreasury:
         liquidation_event = {
             "address": POOL,
             "topics": [
-                AaveV3Event.LIQUIDATION_CALL.value,
+                AaveV3PoolEvent.LIQUIDATION_CALL.value,
                 HexBytes("0x" + "0" * 24 + WETH[2:]),  # collateralAsset
                 HexBytes("0x" + "0" * 24 + DAI[2:]),  # debtAsset
                 HexBytes("0x" + "0" * 24 + LIQUIDATED_USER[2:]),  # user

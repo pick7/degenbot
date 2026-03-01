@@ -9,7 +9,7 @@ debt forgiveness scenarios.
 
 from hexbytes import HexBytes
 
-from degenbot.cli.aave import AaveV3Event
+from degenbot.aave.events import AaveV3PoolEvent
 
 
 class TestDebtBurnWithoutPoolEvent:
@@ -38,7 +38,7 @@ class TestDebtBurnWithoutPoolEvent:
             "pool_events": [
                 # DeficitCreated for USDC debt (logIndex 105)
                 {
-                    "topics": [AaveV3Event.DEFICIT_CREATED.value],
+                    "topics": [AaveV3PoolEvent.DEFICIT_CREATED.value],
                     "logIndex": 105,
                     "data": HexBytes(
                         "0x0000000000000000000000000000000000000000000000000000000000ad7dcb"
@@ -46,7 +46,7 @@ class TestDebtBurnWithoutPoolEvent:
                 },
                 # LiquidationCall for WETH collateral (logIndex 117)
                 {
-                    "topics": [AaveV3Event.LIQUIDATION_CALL.value],
+                    "topics": [AaveV3PoolEvent.LIQUIDATION_CALL.value],
                     "logIndex": 117,
                     "data": HexBytes(
                         "0x0000000000000000000000000000000000000000000000000000000000ad7dcb"
@@ -190,20 +190,20 @@ class TestDebtBurnWithoutPoolEvent:
         """
         # These are the event types that can match debt burns
         matching_event_types = {
-            AaveV3Event.REPAY.value,
-            AaveV3Event.LIQUIDATION_CALL.value,
-            AaveV3Event.DEFICIT_CREATED.value,
+            AaveV3PoolEvent.REPAY.value,
+            AaveV3PoolEvent.LIQUIDATION_CALL.value,
+            AaveV3PoolEvent.DEFICIT_CREATED.value,
         }
 
         # Each has different data structure
-        repay_data = {"topics": [AaveV3Event.REPAY.value]}
-        liquidation_data = {"topics": [AaveV3Event.LIQUIDATION_CALL.value]}
-        deficit_data = {"topics": [AaveV3Event.DEFICIT_CREATED.value]}
+        repay_data = {"topics": [AaveV3PoolEvent.REPAY.value]}
+        liquidation_data = {"topics": [AaveV3PoolEvent.LIQUIDATION_CALL.value]}
+        deficit_data = {"topics": [AaveV3PoolEvent.DEFICIT_CREATED.value]}
 
         assert repay_data["topics"][0] in matching_event_types
         assert liquidation_data["topics"][0] in matching_event_types
         assert deficit_data["topics"][0] in matching_event_types
 
         # Other events should NOT match debt burns
-        withdraw_data = {"topics": [AaveV3Event.WITHDRAW.value]}
+        withdraw_data = {"topics": [AaveV3PoolEvent.WITHDRAW.value]}
         assert withdraw_data["topics"][0] not in matching_event_types

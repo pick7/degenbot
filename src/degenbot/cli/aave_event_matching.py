@@ -32,6 +32,7 @@ from eth_typing import ChecksumAddress
 from hexbytes import HexBytes
 from web3.types import LogReceipt
 
+from degenbot.aave.events import AaveV3PoolEvent
 from degenbot.checksum_cache import get_checksum_address
 from degenbot.cli.aave_transaction_operations import Operation, OperationType, ScaledTokenEvent
 from degenbot.exceptions import DegenbotValueError
@@ -99,19 +100,6 @@ class ScaledTokenEventType(Enum):
     GHO_DEBT_BURN = auto()
 
 
-class AaveV3Event(Enum):
-    """Aave V3 Pool event types."""
-
-    SUPPLY = HexBytes("0x2b627736bca15cd5381dcf80b0bf11fd197d01a037c52b927a881a10fb73ba61")
-    WITHDRAW = HexBytes("0x3115d1449a7b732c986cba18244e897a450f61e1bb8d589cd2e69e6c8924f9f7")
-    BORROW = HexBytes("0xb3d084820fb1a9decffb176436bd02558d15fac9b0ddfed8c465bc7359d7dce0")
-    REPAY = HexBytes("0xa534c8dbe71f871f9f3530e97a74601fea17b426cae02e1c5aee42c96c784051")
-    LIQUIDATION_CALL = HexBytes(
-        "0xe413a321e8681d831f4dbccbca790d2952b56f977908e45be37335533e005286"
-    )
-    DEFICIT_CREATED = HexBytes("0x2bccfb3fad376d59d7accf970515eb77b2f27b082c90ed0fb15583dd5a942699")
-
-
 @dataclass(frozen=True)
 class MatchConfig:
     """Configuration for matching a scaled token event to pool events.
@@ -125,7 +113,7 @@ class MatchConfig:
     """
 
     target_event: ScaledTokenEventType
-    pool_event_types: list[AaveV3Event] = field(default_factory=list)
+    pool_event_types: list[AaveV3PoolEvent] = field(default_factory=list)
     consumption_policy: EventConsumptionPolicy = EventConsumptionPolicy.CONSUMABLE
     consumption_condition: Callable[[LogReceipt], bool] | None = None
     match_order_priority: bool = True
@@ -176,10 +164,10 @@ class EventMatcher:
         ScaledTokenEventType.COLLATERAL_MINT: MatchConfig(
             target_event=ScaledTokenEventType.COLLATERAL_MINT,
             pool_event_types=[
-                AaveV3Event.SUPPLY,
-                AaveV3Event.WITHDRAW,
-                AaveV3Event.REPAY,
-                AaveV3Event.LIQUIDATION_CALL,
+                AaveV3PoolEvent.SUPPLY,
+                AaveV3PoolEvent.WITHDRAW,
+                AaveV3PoolEvent.REPAY,
+                AaveV3PoolEvent.LIQUIDATION_CALL,
             ],
             consumption_policy=EventConsumptionPolicy.CONDITIONAL,
             consumption_condition=lambda e: _should_consume_collateral_mint_pool_event(e),
@@ -192,9 +180,9 @@ class EventMatcher:
         ScaledTokenEventType.COLLATERAL_BURN: MatchConfig(
             target_event=ScaledTokenEventType.COLLATERAL_BURN,
             pool_event_types=[
-                AaveV3Event.WITHDRAW,
-                AaveV3Event.REPAY,
-                AaveV3Event.LIQUIDATION_CALL,
+                AaveV3PoolEvent.WITHDRAW,
+                AaveV3PoolEvent.REPAY,
+                AaveV3PoolEvent.LIQUIDATION_CALL,
             ],
             consumption_policy=EventConsumptionPolicy.CONDITIONAL,
             consumption_condition=lambda e: _should_consume_collateral_burn_pool_event(e),
@@ -206,9 +194,9 @@ class EventMatcher:
         ScaledTokenEventType.DEBT_MINT: MatchConfig(
             target_event=ScaledTokenEventType.DEBT_MINT,
             pool_event_types=[
-                AaveV3Event.BORROW,
-                AaveV3Event.REPAY,
-                AaveV3Event.LIQUIDATION_CALL,
+                AaveV3PoolEvent.BORROW,
+                AaveV3PoolEvent.REPAY,
+                AaveV3PoolEvent.LIQUIDATION_CALL,
             ],
             consumption_policy=EventConsumptionPolicy.CONDITIONAL,
             consumption_condition=lambda e: _should_consume_debt_mint_pool_event(e),
@@ -221,9 +209,9 @@ class EventMatcher:
         ScaledTokenEventType.DEBT_BURN: MatchConfig(
             target_event=ScaledTokenEventType.DEBT_BURN,
             pool_event_types=[
-                AaveV3Event.REPAY,
-                AaveV3Event.LIQUIDATION_CALL,
-                AaveV3Event.DEFICIT_CREATED,
+                AaveV3PoolEvent.REPAY,
+                AaveV3PoolEvent.LIQUIDATION_CALL,
+                AaveV3PoolEvent.DEFICIT_CREATED,
             ],
             consumption_policy=EventConsumptionPolicy.CONDITIONAL,
             consumption_condition=lambda e: _should_consume_debt_burn_pool_event(e),
@@ -233,7 +221,7 @@ class EventMatcher:
         # See debug/aave/0012b
         ScaledTokenEventType.GHO_DEBT_MINT: MatchConfig(
             target_event=ScaledTokenEventType.GHO_DEBT_MINT,
-            pool_event_types=[AaveV3Event.BORROW, AaveV3Event.REPAY],
+            pool_event_types=[AaveV3PoolEvent.BORROW, AaveV3PoolEvent.REPAY],
             consumption_policy=EventConsumptionPolicy.CONDITIONAL,
             consumption_condition=lambda e: _should_consume_gho_debt_mint_pool_event(e),
         ),
@@ -244,9 +232,9 @@ class EventMatcher:
         ScaledTokenEventType.GHO_DEBT_BURN: MatchConfig(
             target_event=ScaledTokenEventType.GHO_DEBT_BURN,
             pool_event_types=[
-                AaveV3Event.REPAY,
-                AaveV3Event.LIQUIDATION_CALL,
-                AaveV3Event.DEFICIT_CREATED,
+                AaveV3PoolEvent.REPAY,
+                AaveV3PoolEvent.LIQUIDATION_CALL,
+                AaveV3PoolEvent.DEFICIT_CREATED,
             ],
             consumption_policy=EventConsumptionPolicy.CONDITIONAL,
             consumption_condition=lambda e: _should_consume_gho_debt_burn_pool_event(e),
@@ -308,7 +296,7 @@ class EventMatcher:
     @staticmethod
     def _matches_pool_event(
         pool_event: LogReceipt,
-        expected_type: AaveV3Event,
+        expected_type: AaveV3PoolEvent,
         user_address: ChecksumAddress,
         reserve_address: ChecksumAddress,
     ) -> bool:
@@ -341,12 +329,12 @@ class EventMatcher:
         if (
             event_topic != expected_type.value
             and not (
-                event_topic == AaveV3Event.LIQUIDATION_CALL.value
-                and expected_type in {AaveV3Event.REPAY, AaveV3Event.WITHDRAW}
+                event_topic == AaveV3PoolEvent.LIQUIDATION_CALL.value
+                and expected_type in {AaveV3PoolEvent.REPAY, AaveV3PoolEvent.WITHDRAW}
             )
             and not (
-                event_topic == AaveV3Event.DEFICIT_CREATED.value
-                and expected_type == AaveV3Event.REPAY
+                event_topic == AaveV3PoolEvent.DEFICIT_CREATED.value
+                and expected_type == AaveV3PoolEvent.REPAY
             )
         ):
             logger.debug(
@@ -354,7 +342,7 @@ class EventMatcher:
             )
             return False
 
-        if expected_type == AaveV3Event.BORROW:
+        if expected_type == AaveV3PoolEvent.BORROW:
             # BORROW: topics[1]=reserve, topics[2]=onBehalfOf, data=(amount, interestRateMode)
             event_reserve = _decode_address(pool_event["topics"][1])
             event_on_behalf_of = _decode_address(pool_event["topics"][2])
@@ -374,9 +362,9 @@ class EventMatcher:
             )
             return matches
 
-        if expected_type == AaveV3Event.REPAY:
-            if event_topic == AaveV3Event.REPAY.value:
-                # REPAY: topics[1]=reserve, topics[2]=user
+        if expected_type == AaveV3PoolEvent.REPAY:
+            if event_topic == AaveV3PoolEvent.REPAY.value:
+                # REPAY: topics[1]=reserve, topics[2]=user, data=(amount, useATokens)
                 event_reserve = _decode_address(pool_event["topics"][1])
                 event_user = _decode_address(pool_event["topics"][2])
                 matches = event_user == user_address and event_reserve == reserve_address
@@ -385,7 +373,7 @@ class EventMatcher:
                     f"matches={matches}"
                 )
                 return matches
-            if event_topic == AaveV3Event.LIQUIDATION_CALL.value:
+            if event_topic == AaveV3PoolEvent.LIQUIDATION_CALL.value:
                 # Liquidation matching - match on debtAsset
                 event_debt_asset = _decode_address(pool_event["topics"][2])
                 event_user = _decode_address(pool_event["topics"][3])
@@ -395,7 +383,7 @@ class EventMatcher:
                     f"event_debt_asset={event_debt_asset}, matches={matches}"
                 )
                 return matches
-            if event_topic == AaveV3Event.DEFICIT_CREATED.value:
+            if event_topic == AaveV3PoolEvent.DEFICIT_CREATED.value:
                 # DeficitCreated matching - debt written off
                 event_user = _decode_address(pool_event["topics"][1])
                 event_reserve = _decode_address(pool_event["topics"][2])
@@ -406,7 +394,7 @@ class EventMatcher:
                 )
                 return matches
 
-        elif expected_type == AaveV3Event.SUPPLY:
+        elif expected_type == AaveV3PoolEvent.SUPPLY:
             # SUPPLY: topics[1]=reserve, topics[2]=onBehalfOf, topics[3]=referralCode
             # Aave V3 Supply event format (4 topics):
             #   Supply(address indexed reserve, address indexed onBehalfOf,
@@ -421,8 +409,8 @@ class EventMatcher:
             )
             return matches
 
-        elif expected_type == AaveV3Event.WITHDRAW:
-            if event_topic == AaveV3Event.WITHDRAW.value:
+        elif expected_type == AaveV3PoolEvent.WITHDRAW:
+            if event_topic == AaveV3PoolEvent.WITHDRAW.value:
                 # WITHDRAW: topics[1]=reserve, topics[2]=user
                 event_reserve = _decode_address(pool_event["topics"][1])
                 event_user = _decode_address(pool_event["topics"][2])
@@ -432,7 +420,7 @@ class EventMatcher:
                     f"matches={matches}"
                 )
                 return matches
-            if event_topic == AaveV3Event.LIQUIDATION_CALL.value:
+            if event_topic == AaveV3PoolEvent.LIQUIDATION_CALL.value:
                 # Liquidation matching - match on collateralAsset
                 event_collateral_asset = _decode_address(pool_event["topics"][1])
                 event_user = _decode_address(pool_event["topics"][3])
@@ -443,7 +431,7 @@ class EventMatcher:
                 )
                 return matches
 
-        elif expected_type == AaveV3Event.LIQUIDATION_CALL:
+        elif expected_type == AaveV3PoolEvent.LIQUIDATION_CALL:
             # LIQUIDATION_CALL: topics[1]=collateralAsset, topics[2]=debtAsset, topics[3]=user
             event_collateral_asset = _decode_address(pool_event["topics"][1])
             event_debt_asset = _decode_address(pool_event["topics"][2])
@@ -457,7 +445,7 @@ class EventMatcher:
                 )
                 return matches
 
-        elif expected_type == AaveV3Event.DEFICIT_CREATED:
+        elif expected_type == AaveV3PoolEvent.DEFICIT_CREATED:
             # DEFICIT_CREATED: topics[1]=user, topics[2]=asset, data=(uint256 amountCreated)
             # Used for GHO liquidations and bad debt write-offs
             event_user = _decode_address(pool_event["topics"][1])
@@ -479,7 +467,7 @@ class EventMatcher:
         reserve_address: ChecksumAddress,
         *,
         check_users: list[ChecksumAddress] | None = None,
-        try_event_type_first: AaveV3Event | None = None,
+        try_event_type_first: AaveV3PoolEvent | None = None,
     ) -> EventMatchResult | None:
         """Find a matching pool event for a scaled token event.
 
@@ -617,7 +605,7 @@ class EventMatcher:
         event_topic = pool_event["topics"][0]
         result: dict[str, int] = {}
 
-        if event_topic == AaveV3Event.SUPPLY.value:
+        if event_topic == AaveV3PoolEvent.SUPPLY.value:
             # SUPPLY: data=(address caller, uint256 amount)
             (_, raw_amount) = decode(
                 types=["address", "uint256"],
@@ -625,7 +613,7 @@ class EventMatcher:
             )
             result["raw_amount"] = raw_amount
 
-        elif event_topic == AaveV3Event.WITHDRAW.value:
+        elif event_topic == AaveV3PoolEvent.WITHDRAW.value:
             # WITHDRAW: data=(uint256 amount)
             (raw_amount,) = decode(
                 types=["uint256"],
@@ -633,7 +621,7 @@ class EventMatcher:
             )
             result["raw_amount"] = raw_amount
 
-        elif event_topic == AaveV3Event.BORROW.value:
+        elif event_topic == AaveV3PoolEvent.BORROW.value:
             # BORROW: data=(address caller, uint256 amount, uint8 interestRateMode, uint256 borrowRate)
             (_, raw_amount, _, _) = decode(
                 types=["address", "uint256", "uint8", "uint256"],
@@ -641,7 +629,7 @@ class EventMatcher:
             )
             result["raw_amount"] = raw_amount
 
-        elif event_topic == AaveV3Event.REPAY.value:
+        elif event_topic == AaveV3PoolEvent.REPAY.value:
             # REPAY: data=(uint256 amount, bool useATokens)
             raw_amount, use_a_tokens = decode(
                 types=["uint256", "bool"],
@@ -650,7 +638,7 @@ class EventMatcher:
             result["raw_amount"] = raw_amount
             result["use_a_tokens"] = int(use_a_tokens)  # Store as int for TypedDict
 
-        elif event_topic == AaveV3Event.LIQUIDATION_CALL.value:
+        elif event_topic == AaveV3PoolEvent.LIQUIDATION_CALL.value:
             # LIQUIDATION_CALL: data=(uint256 debtToCover, uint256 liquidatedCollateralAmount,
             #                          address liquidator, bool receiveAToken)
             debt_to_cover, liquidated_collateral, _, _ = decode(
@@ -660,7 +648,7 @@ class EventMatcher:
             result["debt_to_cover"] = debt_to_cover
             result["liquidated_collateral"] = liquidated_collateral
 
-        elif event_topic == AaveV3Event.DEFICIT_CREATED.value:
+        elif event_topic == AaveV3PoolEvent.DEFICIT_CREATED.value:
             # DEFICIT_CREATED: data=(uint256 amountCreated)
             (amount_created,) = decode(
                 types=["uint256"],
@@ -689,10 +677,10 @@ def _should_consume_collateral_burn_pool_event(pool_event: LogReceipt) -> bool:
     """
     event_topic = pool_event["topics"][0]
 
-    if event_topic == AaveV3Event.LIQUIDATION_CALL.value:
+    if event_topic == AaveV3PoolEvent.LIQUIDATION_CALL.value:
         return False
 
-    if event_topic == AaveV3Event.REPAY.value:
+    if event_topic == AaveV3PoolEvent.REPAY.value:
         # REPAY: data=(uint256 amount, bool useATokens)
         _, use_a_tokens = decode(
             types=["uint256", "bool"],
@@ -721,8 +709,8 @@ def _should_consume_collateral_mint_pool_event(pool_event: LogReceipt) -> bool:
     # LIQUIDATION_CALL and REPAY are never consumed because they must be available
     # to match multiple operations (liquidations or repay-with-aTokens transactions)
     if event_topic in {
-        AaveV3Event.LIQUIDATION_CALL.value,
-        AaveV3Event.REPAY.value,
+        AaveV3PoolEvent.LIQUIDATION_CALL.value,
+        AaveV3PoolEvent.REPAY.value,
     }:
         return False
 
@@ -746,8 +734,8 @@ def _should_consume_debt_mint_pool_event(pool_event: LogReceipt) -> bool:
     # REPAY and LIQUIDATION_CALL are never consumed by debt mints
     # because they need to be available for other operations
     if event_topic in {
-        AaveV3Event.REPAY.value,
-        AaveV3Event.LIQUIDATION_CALL.value,
+        AaveV3PoolEvent.REPAY.value,
+        AaveV3PoolEvent.LIQUIDATION_CALL.value,
     }:
         return False
 
@@ -769,13 +757,13 @@ def _should_consume_debt_burn_pool_event(pool_event: LogReceipt) -> bool:
     """
     event_topic = pool_event["topics"][0]
 
-    if event_topic == AaveV3Event.LIQUIDATION_CALL.value:
+    if event_topic == AaveV3PoolEvent.LIQUIDATION_CALL.value:
         return False
 
-    if event_topic == AaveV3Event.DEFICIT_CREATED.value:
+    if event_topic == AaveV3PoolEvent.DEFICIT_CREATED.value:
         return False
 
-    if event_topic == AaveV3Event.REPAY.value:
+    if event_topic == AaveV3PoolEvent.REPAY.value:
         # REPAY: data=(uint256 amount, bool useATokens)
         _, use_a_tokens = decode(
             types=["uint256", "bool"],
@@ -798,7 +786,7 @@ def _should_consume_gho_debt_mint_pool_event(pool_event: LogReceipt) -> bool:
     event_topic = pool_event["topics"][0]
 
     # REPAY is never consumed by GHO debt mints
-    if event_topic == AaveV3Event.REPAY.value:
+    if event_topic == AaveV3PoolEvent.REPAY.value:
         return False
 
     return True
@@ -818,8 +806,8 @@ def _should_consume_gho_debt_burn_pool_event(pool_event: LogReceipt) -> bool:
     event_topic = pool_event["topics"][0]
 
     if event_topic in {
-        AaveV3Event.LIQUIDATION_CALL.value,
-        AaveV3Event.DEFICIT_CREATED.value,
+        AaveV3PoolEvent.LIQUIDATION_CALL.value,
+        AaveV3PoolEvent.DEFICIT_CREATED.value,
     }:
         return False
 

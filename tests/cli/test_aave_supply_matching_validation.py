@@ -13,7 +13,7 @@ Asset: AwstETH (0x0B925eD163218f6662a35e0f0371Ac234f9E9371)
 
 from hexbytes import HexBytes
 
-from degenbot.cli.aave import AaveV3Event
+from degenbot.aave.events import AaveV3ScaledTokenEvent
 
 
 class TestSupplyMatchingValidation:
@@ -40,7 +40,7 @@ class TestSupplyMatchingValidation:
         # Simulated Mint event at log 287 (pure interest accrual)
         mint_event = {
             "topics": [
-                AaveV3Event.SCALED_TOKEN_MINT.value,
+                AaveV3ScaledTokenEvent.MINT.value,
                 HexBytes(
                     "0x0000000000000000000000001809f186d680f239420b56948c58f8dbbcdf1e18"
                 ),  # caller

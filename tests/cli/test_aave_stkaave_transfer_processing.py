@@ -12,7 +12,7 @@ from hexbytes import HexBytes
 from web3.types import LogReceipt
 
 from degenbot.checksum_cache import get_checksum_address
-from degenbot.cli.aave import AaveV3Event
+from degenbot.aave.events import ERC20Event
 
 # Test addresses
 STKAAVE_CONTRACT_ADDRESS = get_checksum_address("0x4da27a545c0c5B758a6BA100e3a049001de870f5")
@@ -36,7 +36,7 @@ class EventFactory:
     ) -> LogReceipt:
         """Create an ERC20 Transfer event."""
         topics = [
-            AaveV3Event.ERC20_TRANSFER.value,
+            ERC20Event.TRANSFER.value,
             HexBytes("0x" + "0" * 24 + from_address[2:]),
             HexBytes("0x" + "0" * 24 + to_address[2:]),
         ]
@@ -106,7 +106,7 @@ class TestStkAaveTransferDispatch:
         )
 
         # The topic should be ERC20_TRANSFER
-        assert event["topics"][0] == AaveV3Event.ERC20_TRANSFER.value
+        assert event["topics"][0] == ERC20Event.TRANSFER.value
         # From address should be zero
         assert event["topics"][1].hex()[-40:] == "0" * 40
         # To address should be the user
@@ -166,7 +166,7 @@ class TestStkAaveEventEncoding:
         assert event["address"] == STKAAVE_CONTRACT_ADDRESS
 
         # Verify topics
-        assert event["topics"][0] == AaveV3Event.ERC20_TRANSFER.value
+        assert event["topics"][0] == ERC20Event.TRANSFER.value
 
         # Verify amount
         (decoded_amount,) = eth_abi.decode(["uint256"], event["data"])

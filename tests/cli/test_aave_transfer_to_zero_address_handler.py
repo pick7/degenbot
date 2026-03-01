@@ -21,7 +21,7 @@ from hexbytes import HexBytes
 
 from degenbot.checksum_cache import get_checksum_address
 from degenbot.cli.aave_transaction_operations import (
-    AaveV3Event,
+    GHO_TOKEN_ADDRESS,
     TransactionOperationsParser,
     OperationType,
 )

@@ -14,7 +14,7 @@ This fixes a bug where the BalanceTransfer was incorrectly skipped when:
 
 from hexbytes import HexBytes
 
-from degenbot.cli.aave import AaveV3Event
+from degenbot.aave.events import AaveV3ScaledTokenEvent
 
 
 class TestBalanceTransferInterestAccrual:
@@ -41,7 +41,7 @@ class TestBalanceTransferInterestAccrual:
         """
         mint_event = {
             "topics": [
-                AaveV3Event.SCALED_TOKEN_MINT.value,
+                AaveV3ScaledTokenEvent.MINT.value,
                 HexBytes(
                     "0x000000000000000000000000cdd092c62344253977a86094757410c364993d09"
                 ),  # from
@@ -90,7 +90,7 @@ class TestBalanceTransferInterestAccrual:
         # Simulated transaction events
         mint_event = {
             "topics": [
-                AaveV3Event.SCALED_TOKEN_MINT.value,
+                AaveV3ScaledTokenEvent.MINT.value,
                 HexBytes("0x000000000000000000000000cdd092c62344253977a86094757410c364993d09"),
                 HexBytes("0x000000000000000000000000d2eee629994e83194db1d59cfcf9eaa923c8e110"),
             ],
@@ -109,7 +109,7 @@ class TestBalanceTransferInterestAccrual:
 
         balance_transfer_event = {
             "topics": [
-                AaveV3Event.SCALED_TOKEN_BALANCE_TRANSFER.value,
+                AaveV3ScaledTokenEvent.BALANCE_TRANSFER.value,
                 HexBytes(
                     "0x000000000000000000000000cdd092c62344253977a86094757410c364993d09"
                 ),  # from
@@ -203,7 +203,7 @@ class TestBalanceTransferInterestAccrual:
         # value = 1000, balanceIncrease = 50 (interest accrued)
         mint_event = {
             "topics": [
-                AaveV3Event.SCALED_TOKEN_MINT.value,
+                AaveV3ScaledTokenEvent.MINT.value,
                 HexBytes("0x000000000000000000000000cdd092c62344253977a86094757410c364993d09"),
                 HexBytes("0x000000000000000000000000d2eee629994e83194db1d59cfcf9eaa923c8e110"),
             ],

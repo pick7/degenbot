@@ -14,8 +14,8 @@ from hexbytes import HexBytes
 from web3.types import LogReceipt
 
 from degenbot.checksum_cache import get_checksum_address
+from degenbot.aave.events import AaveV3PoolEvent
 from degenbot.cli.aave_event_matching import (
-    AaveV3Event,
     EventMatcher,
     ScaledTokenEventType,
 )
@@ -40,7 +40,7 @@ class TestParaSwapMultiHopDeposits:
         supply_event = {
             "address": get_checksum_address("0x87870B53189092136F800c5B70A783F6E4bE9E8B"),
             "topics": [
-                AaveV3Event.SUPPLY.value,
+                AaveV3PoolEvent.SUPPLY.value,
                 HexBytes(reserve),
                 HexBytes(user),
                 HexBytes("0x0000000000000000000000000000000000000000000000000000000000000000"),
@@ -107,7 +107,7 @@ class TestParaSwapMultiHopDeposits:
         supply_event = {
             "address": get_checksum_address("0x87870B53189092136F800c5B70A783F6E4bE9E8B"),
             "topics": [
-                AaveV3Event.SUPPLY.value,
+                AaveV3PoolEvent.SUPPLY.value,
                 HexBytes(reserve),
                 HexBytes(user),
                 HexBytes("0x0000000000000000000000000000000000000000000000000000000000000000"),

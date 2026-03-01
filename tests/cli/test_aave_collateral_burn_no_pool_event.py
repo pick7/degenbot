@@ -8,7 +8,7 @@ event. This can occur in direct aToken burns, protocol upgrades, or other edge c
 
 from hexbytes import HexBytes
 
-from degenbot.cli.aave import AaveV3Event
+from degenbot.aave.events import AaveV3PoolEvent, AaveV3ScaledTokenEvent
 
 
 class TestCollateralBurnWithoutPoolEvent:
@@ -52,7 +52,7 @@ class TestCollateralBurnWithoutPoolEvent:
                 {
                     "address": HexBytes("0x98c23e9d8f34fefb1b7bd6a91b7ff122f4e16f5c"),
                     "topics": [
-                        AaveV3Event.SCALED_TOKEN_BURN.value,
+                        AaveV3ScaledTokenEvent.BURN.value,
                         HexBytes(
                             "0x000000000000000000000000d400fc38ed4732893174325693a63c30ee3881a8"
                         ),  # from
@@ -93,9 +93,9 @@ class TestCollateralBurnWithoutPoolEvent:
 
         # No WITHDRAW, REPAY, or LIQUIDATION_CALL event in pool_events
         pool_event_topics = [e["topics"][0].hex()[:10] for e in tx_events["pool_events"]]
-        assert AaveV3Event.WITHDRAW.value.hex()[:10] not in pool_event_topics
-        assert AaveV3Event.REPAY.value.hex()[:10] not in pool_event_topics
-        assert AaveV3Event.LIQUIDATION_CALL.value.hex()[:10] not in pool_event_topics
+        assert f"{AaveV3PoolEvent.WITHDRAW.value.hex()[:10]}" not in pool_event_topics
+        assert f"{AaveV3PoolEvent.REPAY.value.hex()[:10]}" not in pool_event_topics
+        assert f"{AaveV3PoolEvent.LIQUIDATION_CALL.value.hex()[:10]}" not in pool_event_topics
 
     def test_event_amount_is_scaled_amount(self):
         """

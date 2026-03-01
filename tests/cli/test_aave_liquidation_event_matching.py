@@ -7,7 +7,7 @@ too eagerly, allowing multiple operations to match them in liquidation and repay
 
 from hexbytes import HexBytes
 
-from degenbot.cli.aave import AaveV3Event
+from degenbot.aave.events import AaveV3PoolEvent
 
 
 class TestLiquidationCallConsumptionPattern:
@@ -33,7 +33,7 @@ class TestLiquidationCallConsumptionPattern:
         """
         # Simulated pool event
         pool_event = {
-            "topics": [AaveV3Event.LIQUIDATION_CALL.value],
+            "topics": [AaveV3PoolEvent.LIQUIDATION_CALL.value],
             "logIndex": 100,
         }
 
@@ -41,7 +41,7 @@ class TestLiquidationCallConsumptionPattern:
         # Only mark as consumed if NOT a LIQUIDATION_CALL event
         matched_pool_events = {}
 
-        if pool_event["topics"][0] != AaveV3Event.LIQUIDATION_CALL.value:
+        if pool_event["topics"][0] != AaveV3PoolEvent.LIQUIDATION_CALL.value:
             matched_pool_events[pool_event["logIndex"]] = True
 
         # LIQUIDATION_CALL should NOT be in matched_pool_events
@@ -61,7 +61,7 @@ class TestLiquidationCallConsumptionPattern:
         """
         # Simulated pool event
         pool_event = {
-            "topics": [AaveV3Event.REPAY.value],
+            "topics": [AaveV3PoolEvent.REPAY.value],
             "logIndex": 100,
         }
 
@@ -71,8 +71,8 @@ class TestLiquidationCallConsumptionPattern:
 
         # Mint operation: should NOT consume REPAY
         if pool_event["topics"][0] not in {
-            AaveV3Event.LIQUIDATION_CALL.value,
-            AaveV3Event.REPAY.value,
+            AaveV3PoolEvent.LIQUIDATION_CALL.value,
+            AaveV3PoolEvent.REPAY.value,
         }:
             matched_pool_events[pool_event["logIndex"]] = True
 
@@ -85,13 +85,13 @@ class TestLiquidationCallConsumptionPattern:
     def test_other_events_should_be_consumed(self):
         """Non-LIQUIDATION_CALL/REPAY events should be marked as consumed."""
         withdraw_event = {
-            "topics": [AaveV3Event.WITHDRAW.value],
+            "topics": [AaveV3PoolEvent.WITHDRAW.value],
             "logIndex": 100,
         }
 
         matched_pool_events = {}
 
-        if withdraw_event["topics"][0] != AaveV3Event.LIQUIDATION_CALL.value:
+        if withdraw_event["topics"][0] != AaveV3PoolEvent.LIQUIDATION_CALL.value:
             matched_pool_events[withdraw_event["logIndex"]] = True
 
         # WITHDRAW should be in matched_pool_events
@@ -100,12 +100,12 @@ class TestLiquidationCallConsumptionPattern:
     def test_event_topic_values(self):
         """Verify the expected event topic values."""
         # These are the actual event signatures
-        assert AaveV3Event.LIQUIDATION_CALL.value == HexBytes(
+        assert AaveV3PoolEvent.LIQUIDATION_CALL.value == HexBytes(
             "0xe413a321e8681d831f4dbccbca790d2952b56f977908e45be37335533e005286"
         )
-        assert AaveV3Event.REPAY.value == HexBytes(
+        assert AaveV3PoolEvent.REPAY.value == HexBytes(
             "0xa534c8dbe71f871f9f3530e97a74601fea17b426cae02e1c5aee42c96c784051"
         )
-        assert AaveV3Event.WITHDRAW.value == HexBytes(
+        assert AaveV3PoolEvent.WITHDRAW.value == HexBytes(
             "0x3115d1449a7b732c986cba18244e897a450f61e1bb8d589cd2e69e6c8924f9f7"
         )

@@ -15,6 +15,7 @@ from eth_typing import ChecksumAddress
 from hexbytes import HexBytes
 from web3.types import LogReceipt
 
+from degenbot.aave.events import AaveV3PoolEvent, AaveV3ScaledTokenEvent
 from degenbot.checksum_cache import get_checksum_address
 
 
@@ -86,30 +87,6 @@ class OperationType(Enum):
     BALANCE_TRANSFER = auto()  # Standalone BalanceTransfer
     MINT_TO_TREASURY = auto()  # Pool minting aTokens to treasury (no SUPPLY event)
     UNKNOWN = auto()
-
-
-class AaveV3Event(Enum):
-    """Aave V3 Pool event topic hashes."""
-
-    SUPPLY = HexBytes("0x2b627736bca15cd5381dcf80b0bf11fd197d01a037c52b927a881a10fb73ba61")
-    WITHDRAW = HexBytes("0x3115d1449a7b732c986cba18244e897a450f61e1bb8d589cd2e69e6c8924f9f7")
-    BORROW = HexBytes("0xb3d084820fb1a9decffb176436bd02558d15fac9b0ddfed8c465bc7359d7dce0")
-    REPAY = HexBytes("0xa534c8dbe71f871f9f3530e97a74601fea17b426cae02e1c5aee42c96c784051")
-    LIQUIDATION_CALL = HexBytes(
-        "0xe413a321e8681d831f4dbccbca790d2952b56f977908e45be37335533e005286"
-    )
-    DEFICIT_CREATED = HexBytes("0x2bccfb3fad376d59d7accf970515eb77b2f27b082c90ed0fb15583dd5a942699")
-
-    # Scaled token events
-    SCALED_TOKEN_MINT = HexBytes(
-        "0x458f5fa412d0f69b08dd84872b0215675cc67bc1d5b6fd93300a1c3878b86196"
-    )
-    SCALED_TOKEN_BURN = HexBytes(
-        "0x4cf25bc1d991c17529c25213d3cc0cda295eeaad5f13f361969b12ea48015f90"
-    )
-    SCALED_TOKEN_BALANCE_TRANSFER = HexBytes(
-        "0x4beccb90f994c31aced7a23b5611020728a23d8ec5cddd1a3e9d97b96fda8666"
-    )
 
 
 # GHO Token Address (Ethereum Mainnet)
@@ -366,7 +343,10 @@ class TransactionValidationError(Exception):
 
     def _get_event_name(self, topic: HexBytes) -> str:
         """Get human-readable event name from topic."""
-        for ev in AaveV3Event:
+        for ev in AaveV3PoolEvent:
+            if ev.value == topic:
+                return ev.name
+        for ev in AaveV3ScaledTokenEvent:
             if ev.value == topic:
                 return ev.name
         if topic == TRANSFER_TOPIC:
@@ -521,12 +501,12 @@ class TransactionOperationsParser:
     def _extract_pool_events(self, events: list[LogReceipt]) -> list[LogReceipt]:
         """Extract pool-level events (SUPPLY, WITHDRAW, etc.)."""
         pool_topics = {
-            AaveV3Event.SUPPLY.value.hex(),
-            AaveV3Event.WITHDRAW.value.hex(),
-            AaveV3Event.BORROW.value.hex(),
-            AaveV3Event.REPAY.value.hex(),
-            AaveV3Event.LIQUIDATION_CALL.value.hex(),
-            AaveV3Event.DEFICIT_CREATED.value.hex(),
+            AaveV3PoolEvent.SUPPLY.value.hex(),
+            AaveV3PoolEvent.WITHDRAW.value.hex(),
+            AaveV3PoolEvent.BORROW.value.hex(),
+            AaveV3PoolEvent.REPAY.value.hex(),
+            AaveV3PoolEvent.LIQUIDATION_CALL.value.hex(),
+            AaveV3PoolEvent.DEFICIT_CREATED.value.hex(),
         }
 
         return sorted(
@@ -541,17 +521,17 @@ class TransactionOperationsParser:
         for event in events:
             topic = _get_topic_str(event["topics"][0])
 
-            if topic == AaveV3Event.SCALED_TOKEN_MINT.value.hex():
+            if topic == AaveV3ScaledTokenEvent.MINT.value.hex():
                 ev = self._decode_mint_event(event)
                 if ev:
                     result.append(ev)
 
-            elif topic == AaveV3Event.SCALED_TOKEN_BURN.value.hex():
+            elif topic == AaveV3ScaledTokenEvent.BURN.value.hex():
                 ev = self._decode_burn_event(event)
                 if ev:
                     result.append(ev)
 
-            elif topic == AaveV3Event.SCALED_TOKEN_BALANCE_TRANSFER.value.hex():
+            elif topic == AaveV3ScaledTokenEvent.BALANCE_TRANSFER.value.hex():
                 ev = self._decode_balance_transfer_event(event)
                 if ev:
                     result.append(ev)
@@ -735,27 +715,27 @@ class TransactionOperationsParser:
         """Create operation starting from a pool event."""
         topic = _get_topic_str(pool_event["topics"][0])
 
-        if topic == AaveV3Event.SUPPLY.value.hex():
+        if topic == AaveV3PoolEvent.SUPPLY.value.hex():
             return self._create_supply_operation(
                 operation_id, pool_event, scaled_events, all_events, assigned_indices
             )
-        if topic == AaveV3Event.WITHDRAW.value.hex():
+        if topic == AaveV3PoolEvent.WITHDRAW.value.hex():
             return self._create_withdraw_operation(
                 operation_id, pool_event, scaled_events, all_events, assigned_indices
             )
-        if topic == AaveV3Event.BORROW.value.hex():
+        if topic == AaveV3PoolEvent.BORROW.value.hex():
             return self._create_borrow_operation(
                 operation_id, pool_event, scaled_events, all_events, assigned_indices
             )
-        if topic == AaveV3Event.REPAY.value.hex():
+        if topic == AaveV3PoolEvent.REPAY.value.hex():
             return self._create_repay_operation(
                 operation_id, pool_event, scaled_events, all_events, assigned_indices
             )
-        if topic == AaveV3Event.LIQUIDATION_CALL.value.hex():
+        if topic == AaveV3PoolEvent.LIQUIDATION_CALL.value.hex():
             return self._create_liquidation_operation(
                 operation_id, pool_event, scaled_events, all_events, assigned_indices
             )
-        if topic == AaveV3Event.DEFICIT_CREATED.value.hex():
+        if topic == AaveV3PoolEvent.DEFICIT_CREATED.value.hex():
             return self._create_deficit_operation(
                 operation_id, pool_event, scaled_events, all_events, assigned_indices
             )
@@ -1156,7 +1136,7 @@ class TransactionOperationsParser:
         # If so, this DEFICIT_CREATED is part of the liquidation, not a standalone flash loan
         has_liquidation_for_user = False
         for event in all_events:
-            if event["topics"][0] == AaveV3Event.LIQUIDATION_CALL.value:
+            if event["topics"][0] == AaveV3PoolEvent.LIQUIDATION_CALL.value:
                 liquidation_user = self._decode_address(event["topics"][3])
                 if liquidation_user == user:
                     has_liquidation_for_user = True
@@ -1220,10 +1200,10 @@ class TransactionOperationsParser:
         # Check for pool events that indicate complex transactions
         # In these transactions, DEBT_MINT events may be associated with operations, not interest
         has_liquidation = any(
-            ev["topics"][0] == AaveV3Event.LIQUIDATION_CALL.value for ev in all_events
+            ev["topics"][0] == AaveV3PoolEvent.LIQUIDATION_CALL.value for ev in all_events
         )
-        has_borrow = any(ev["topics"][0] == AaveV3Event.BORROW.value for ev in all_events)
-        has_repay = any(ev["topics"][0] == AaveV3Event.REPAY.value for ev in all_events)
+        has_borrow = any(ev["topics"][0] == AaveV3PoolEvent.BORROW.value for ev in all_events)
+        has_repay = any(ev["topics"][0] == AaveV3PoolEvent.REPAY.value for ev in all_events)
         # Check if there's a collateral burn in the transaction (indicates repayWithATokens)
         has_collateral_burn = any(ev.event_type == "COLLATERAL_BURN" for ev in scaled_events)
         operations: list[Operation] = []
@@ -1844,12 +1824,12 @@ class TransactionOperations:
     def _is_required_pool_event(self, event: LogReceipt) -> bool:
         """Check if an event must be part of an operation."""
         pool_topics = {
-            AaveV3Event.SUPPLY.value,
-            AaveV3Event.WITHDRAW.value,
-            AaveV3Event.BORROW.value,
-            AaveV3Event.REPAY.value,
-            AaveV3Event.LIQUIDATION_CALL.value,
-            AaveV3Event.DEFICIT_CREATED.value,
+            AaveV3PoolEvent.SUPPLY.value,
+            AaveV3PoolEvent.WITHDRAW.value,
+            AaveV3PoolEvent.BORROW.value,
+            AaveV3PoolEvent.REPAY.value,
+            AaveV3PoolEvent.LIQUIDATION_CALL.value,
+            AaveV3PoolEvent.DEFICIT_CREATED.value,
         }
         return event["topics"][0] in pool_topics
 

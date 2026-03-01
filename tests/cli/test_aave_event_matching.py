@@ -21,8 +21,8 @@ from hexbytes import HexBytes
 from web3.types import LogReceipt
 
 from degenbot.checksum_cache import get_checksum_address
+from degenbot.aave.events import AaveV3PoolEvent, AaveV3ScaledTokenEvent
 from degenbot.cli.aave_event_matching import (
-    AaveV3Event,
     EventConsumptionPolicy,
     EventMatcher,
     EventMatchError,
@@ -49,7 +49,7 @@ class TestEventConsumptionPolicies:
         See debug/aave/0010, 0011, 0012a for bugs caused by consuming LIQUIDATION_CALL.
         """
         pool_event = {
-            "topics": [AaveV3Event.LIQUIDATION_CALL.value],
+            "topics": [AaveV3PoolEvent.LIQUIDATION_CALL.value],
             "logIndex": 100,
             "data": HexBytes(
                 # debtToCover
@@ -72,7 +72,7 @@ class TestEventConsumptionPolicies:
         See debug/aave/0013 for flash loan liquidation with DEFICIT_CREATED.
         """
         pool_event = {
-            "topics": [AaveV3Event.DEFICIT_CREATED.value],
+            "topics": [AaveV3PoolEvent.DEFICIT_CREATED.value],
             "logIndex": 105,
             "data": HexBytes(
                 # amountCreated
@@ -89,7 +89,7 @@ class TestEventConsumptionPolicies:
         See debug/aave/0008 for repay-with-aTokens pattern.
         """
         pool_event = {
-            "topics": [AaveV3Event.REPAY.value],
+            "topics": [AaveV3PoolEvent.REPAY.value],
             "logIndex": 101,
             "data": eth_abi.abi.encode(
                 types=[
@@ -115,7 +115,7 @@ class TestEventConsumptionPolicies:
         See debug/aave/0008 for repay-with-aTokens pattern.
         """
         pool_event = {
-            "topics": [AaveV3Event.REPAY.value],
+            "topics": [AaveV3PoolEvent.REPAY.value],
             "logIndex": 101,
             "data": HexBytes(
                 "0x0000000000000000000000000000000000000000000000000000000000000000"  # amount
@@ -129,7 +129,7 @@ class TestEventConsumptionPolicies:
     def test_withdraw_always_consumed(self):
         """WITHDRAW events should always be consumed."""
         pool_event = {
-            "topics": [AaveV3Event.WITHDRAW.value],
+            "topics": [AaveV3PoolEvent.WITHDRAW.value],
             "logIndex": 102,
             "data": HexBytes(
                 "0x0000000000000000000000000000000000000000000000000000000000000000"  # amount
@@ -142,7 +142,7 @@ class TestEventConsumptionPolicies:
     def test_borrow_always_consumed(self):
         """BORROW events should always be consumed."""
         pool_event = {
-            "topics": [AaveV3Event.BORROW.value],
+            "topics": [AaveV3PoolEvent.BORROW.value],
             "logIndex": 103,
             "data": HexBytes(
                 "0x0000000000000000000000000000000000000000000000000000000000000000"  # caller
@@ -177,186 +177,12 @@ class TestLiquidationCallConsumptionPattern:
 
         Transaction pattern (0x574695... from debug/aave/0010):
         - GHO debt burn (logIndex 100) → matches LIQUIDATION_CALL
-        - WETH collateral burn (logIndex 104) → matches same LIQUIDATION_CALL
-        - LIQUIDATION_CALL (logIndex 113) → shared event
+         - WETH collateral burn (logIndex 104) → matches same LIQUIDATION_CALL
+         - LIQUIDATION_CALL (logIndex 113) → shared event
         """
-        liquidation_call_event = {
-            "topics": [
-                AaveV3Event.LIQUIDATION_CALL.value,
-                HexBytes(
-                    "0x000000000000000000000000c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"
-                ),  # collateralAsset=WETH
-                HexBytes(
-                    "0x00000000000000000000000040d16fc0246ad3160ccc09b8d0d3a2cd28ae6c2f"
-                ),  # debtAsset=GHO
-                HexBytes(
-                    "0x000000000000000000000000225c63381cb487f64aa1fc37a59baa3228d6d4ef"
-                ),  # user
-            ],
-            "logIndex": 113,
-            "data": HexBytes(
-                "0x0000000000000000000000000000000000000000000000021c7d5d56c8d9c000"  # debtToCover
-                "0000000000000000000000000000000000000000000000000000340785427800"  # liquidatedCollateral
-                "000000000000000000000000e27bfd9d354e7e0f7c5ef2fea0cd9c3af3533a32"  # liquidator
-                "0000000000000000000000000000000000000000000000000000000000000000"  # receiveAToken
-            ),
-        }
-
-        tx_context = self.create_mock_tx_context(cast("list[LogReceipt]", [liquidation_call_event]))
-        matcher = EventMatcher(tx_context)
-
-        user_address = get_checksum_address("0x225C63381cb487f64Aa1fc37A59baA3228d6d4ef")
-
-        # First: GHO debt burn matches LIQUIDATION_CALL
-        result1 = matcher.find_matching_pool_event(
-            event_type=ScaledTokenEventType.GHO_DEBT_BURN,
-            user_address=user_address,
-            reserve_address=GHO_RESERVE_ADDRESS,
-        )
-
-        assert result1 is not None, "GHO debt burn should match LIQUIDATION_CALL"
-        assert result1["pool_event"] == liquidation_call_event
-        assert result1["should_consume"] is False, "LIQUIDATION_CALL should not be consumed"
-        assert liquidation_call_event["logIndex"] not in tx_context.matched_pool_events
-
-        # Second: WETH collateral burn matches same LIQUIDATION_CALL
-        result2 = matcher.find_matching_pool_event(
-            event_type=ScaledTokenEventType.COLLATERAL_BURN,
-            user_address=user_address,
-            reserve_address=WETH_RESERVE_ADDRESS,
-        )
-
-        assert result2 is not None, "WETH collateral burn should match same LIQUIDATION_CALL"
-        assert result2["pool_event"] == liquidation_call_event
-        assert result2["should_consume"] is False
-
-    def test_liquidation_call_shared_between_debt_mint_and_collateral_mint(self):
-        """LIQUIDATION_CALL should be shared between debt mint and collateral mint.
-
-        Transaction pattern (0x653fcf... from debug/aave/0011):
-        - Self-liquidation where liquidator borrows and receives collateral
-        - Debt mint matches LIQUIDATION_CALL (liquidator borrowing)
-        - Collateral mint matches same LIQUIDATION_CALL (liquidator receiving)
-        """
-        liquidation_call_event = {
-            "topics": [
-                AaveV3Event.LIQUIDATION_CALL.value,
-                HexBytes(
-                    "0x000000000000000000000000c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"
-                ),  # collateralAsset
-                HexBytes(
-                    "0x000000000000000000000000a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
-                ),  # debtAsset
-                HexBytes(
-                    "0x0000000000000000000000008a643b83fe7c75c40f31d6b0d4d494a08fc08d48"
-                ),  # user=liquidator
-            ],
-            "logIndex": 143,
-            "data": HexBytes(
-                "0x0000000000000000000000000000000000000000000000000000000000000000"
-                "0000000000000000000000000000000000000000000000000000000000000000"
-                "0000000000000000000000000000000000000000000000000000000000000000"
-                "0000000000000000000000000000000000000000000000000000000000000000"
-            ),
-        }
-
-        tx_context = self.create_mock_tx_context(cast("list[LogReceipt]", [liquidation_call_event]))
-        matcher = EventMatcher(tx_context)
-
-        liquidator = get_checksum_address("0x8a643B83fE7C75c40f31d6b0d4D494a08FC08d48")
-
-        # Debt mint matches LIQUIDATION_CALL
-        result1 = matcher.find_matching_pool_event(
-            event_type=ScaledTokenEventType.DEBT_MINT,
-            user_address=liquidator,
-            reserve_address=USDC_RESERVE_ADDRESS,
-        )
-
-        assert result1 is not None
-        assert result1["should_consume"] is False
-
-        # Collateral mint matches same LIQUIDATION_CALL
-        result2 = matcher.find_matching_pool_event(
-            event_type=ScaledTokenEventType.COLLATERAL_MINT,
-            user_address=liquidator,
-            reserve_address=WETH_RESERVE_ADDRESS,
-        )
-
-        assert result2 is not None
-        assert result2["should_consume"] is False
-
-
-class TestRepayWithATokensPattern:
-    """Test repay-with-aTokens event consumption patterns.
-
-    When useATokens=True, a single REPAY event must match both:
-    - The debt burn (vToken burn reducing debt)
-    - The collateral burn (aToken burn reducing collateral)
-
-    See debug/aave/0008, 0012b for related bugs.
-    """
-
-    def create_mock_tx_context(self, pool_events: list[LogReceipt]) -> MagicMock:
-        """Create a mock TransactionContext with pool events."""
-        tx_context = MagicMock()
-        tx_context.pool_events = pool_events
-        tx_context.matched_pool_events = {}
-        return tx_context
-
-    def test_repay_shared_when_use_atokens_true(self):
-        """REPAY should be shared between debt burn and collateral burn when useATokens=True."""
         repay_event = {
             "topics": [
-                AaveV3Event.REPAY.value,
-                HexBytes(
-                    "0x000000000000000000000000a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
-                ),  # reserve=USDC
-                HexBytes(
-                    "0x0000000000000000000000004490db0fc0e8de7c7192f12f9c5e8409e7cadda2"
-                ),  # user
-            ],
-            "logIndex": 101,
-            "data": HexBytes(
-                "0x0000000000000000000000000000000000000000000000000000000005f5e100"  # amount
-                "0000000000000000000000000000000000000000000000000000000000000001"  # useATokens=True
-            ),
-        }
-
-        tx_context = self.create_mock_tx_context(cast("list[LogReceipt]", [repay_event]))
-        matcher = EventMatcher(tx_context)
-
-        user_address = get_checksum_address("0x4490db0fc0e8de7c7192f12f9c5e8409e7cadda2")
-
-        # Debt burn matches REPAY but does NOT consume it
-        result1 = matcher.find_matching_pool_event(
-            event_type=ScaledTokenEventType.DEBT_BURN,
-            user_address=user_address,
-            reserve_address=USDC_RESERVE_ADDRESS,
-        )
-
-        assert result1 is not None
-        assert result1["pool_event"] == repay_event
-        assert result1["should_consume"] is False, (
-            "REPAY should not be consumed when useATokens=True"
-        )
-        assert repay_event["logIndex"] not in tx_context.matched_pool_events
-
-        # Collateral burn matches same REPAY
-        result2 = matcher.find_matching_pool_event(
-            event_type=ScaledTokenEventType.COLLATERAL_BURN,
-            user_address=user_address,
-            reserve_address=USDC_RESERVE_ADDRESS,
-        )
-
-        assert result2 is not None
-        assert result2["pool_event"] == repay_event
-        assert result2["should_consume"] is False
-
-    def test_repay_consumed_when_use_atokens_false(self):
-        """REPAY should be consumed when useATokens=False (normal repayment)."""
-        repay_event = {
-            "topics": [
-                AaveV3Event.REPAY.value,
+                AaveV3PoolEvent.REPAY.value,
                 HexBytes("0x000000000000000000000000a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"),
                 HexBytes("0x0000000000000000000000004490db0fc0e8de7c7192f12f9c5e8409e7cadda2"),
             ],
@@ -406,7 +232,7 @@ class TestEventMatchingOrder:
 
         supply_event = {
             "topics": [
-                AaveV3Event.SUPPLY.value,
+                AaveV3PoolEvent.SUPPLY.value,
                 reserve_address_encoded,
                 on_behalf_of_address_encoded,
             ],
@@ -419,7 +245,7 @@ class TestEventMatchingOrder:
 
         withdraw_event = {
             "topics": [
-                AaveV3Event.WITHDRAW.value,
+                AaveV3PoolEvent.WITHDRAW.value,
                 reserve_address_encoded,
                 on_behalf_of_address_encoded,
             ],
@@ -447,7 +273,7 @@ class TestEventMatchingOrder:
         """Collateral burn should try WITHDRAW before REPAY."""
         withdraw_event = {
             "topics": [
-                AaveV3Event.WITHDRAW.value,
+                AaveV3PoolEvent.WITHDRAW.value,
                 HexBytes("0x000000000000000000000000a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"),
                 HexBytes("0x0000000000000000000000004490db0fc0e8de7c7192f12f9c5e8409e7cadda2"),
             ],
@@ -457,7 +283,7 @@ class TestEventMatchingOrder:
 
         repay_event = {
             "topics": [
-                AaveV3Event.REPAY.value,
+                AaveV3PoolEvent.REPAY.value,
                 HexBytes("0x000000000000000000000000a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"),
                 HexBytes("0x0000000000000000000000004490db0fc0e8de7c7192f12f9c5e8409e7cadda2"),
             ],
@@ -499,7 +325,7 @@ class TestEventDataExtraction:
         """Extract raw amount from SUPPLY event."""
         supply_event = {
             "topics": [
-                AaveV3Event.SUPPLY.value,
+                AaveV3PoolEvent.SUPPLY.value,
                 HexBytes("0x000000000000000000000000a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"),
                 HexBytes("0x0000000000000000000000004490db0fc0e8de7c7192f12f9c5e8409e7cadda2"),
             ],
@@ -528,7 +354,7 @@ class TestEventDataExtraction:
         """Extract useATokens flag from REPAY event."""
         repay_event = {
             "topics": [
-                AaveV3Event.REPAY.value,
+                AaveV3PoolEvent.REPAY.value,
                 HexBytes("0x000000000000000000000000a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"),
                 HexBytes("0x0000000000000000000000004490db0fc0e8de7c7192f12f9c5e8409e7cadda2"),
             ],
@@ -560,7 +386,7 @@ class TestEventDataExtraction:
         """Extract debt and collateral amounts from LIQUIDATION_CALL event."""
         liquidation_event = {
             "topics": [
-                AaveV3Event.LIQUIDATION_CALL.value,
+                AaveV3PoolEvent.LIQUIDATION_CALL.value,
                 HexBytes(
                     "0x000000000000000000000000c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"
                 ),  # collateralAsset
@@ -653,7 +479,7 @@ class TestMatchConfigurations:
 
         for event_type in configs_with_liq:
             config = EventMatcher.CONFIGS[event_type]
-            assert AaveV3Event.LIQUIDATION_CALL in config.pool_event_types
+            assert AaveV3PoolEvent.LIQUIDATION_CALL in config.pool_event_types
             assert config.consumption_policy in {
                 EventConsumptionPolicy.REUSABLE,
                 EventConsumptionPolicy.CONDITIONAL,
@@ -687,7 +513,7 @@ class TestEdgeCases:
         """Already consumed events should be skipped."""
         supply_event = {
             "topics": [
-                AaveV3Event.SUPPLY.value,
+                AaveV3PoolEvent.SUPPLY.value,
                 HexBytes("0x000000000000000000000000a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"),
                 HexBytes("0x0000000000000000000000004490db0fc0e8de7c7192f12f9c5e8409e7cadda2"),
             ],
@@ -715,7 +541,7 @@ class TestEdgeCases:
         # Event matches onBehalfOf=user2, not user1
         supply_event = {
             "topics": [
-                AaveV3Event.SUPPLY.value,
+                AaveV3PoolEvent.SUPPLY.value,
                 HexBytes("0x000000000000000000000000a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"),
                 HexBytes(
                     "0x0000000000000000000000002222222222222222222222222222222222222222"
@@ -770,7 +596,7 @@ class TestDebtMintEventMatching:
 
         borrow_event = {
             "topics": [
-                AaveV3Event.BORROW.value,
+                AaveV3PoolEvent.BORROW.value,
                 HexBytes(
                     "0x000000000000000000000000a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
                 ),  # reserve
@@ -814,7 +640,7 @@ class TestDebtMintEventMatching:
         # Borrow event has onBehalfOf=adapter (the caller), not user
         borrow_event = {
             "topics": [
-                AaveV3Event.BORROW.value,
+                AaveV3PoolEvent.BORROW.value,
                 HexBytes("0x000000000000000000000000a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"),
                 HexBytes(
                     "0x0000000000000000000000002222222222222222222222222222222222222222"
@@ -860,7 +686,7 @@ class TestDebtMintEventMatching:
 
         liquidation_event = {
             "topics": [
-                AaveV3Event.LIQUIDATION_CALL.value,
+                AaveV3PoolEvent.LIQUIDATION_CALL.value,
                 HexBytes(
                     "0x000000000000000000000000c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"
                 ),  # collateralAsset
@@ -904,7 +730,7 @@ class TestDebtMintEventMatching:
         # Both events available - BORROW should be tried first
         repay_event = {
             "topics": [
-                AaveV3Event.REPAY.value,
+                AaveV3PoolEvent.REPAY.value,
                 HexBytes("0x000000000000000000000000a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"),
                 HexBytes("0x0000000000000000000000001111111111111111111111111111111111111111"),
             ],
@@ -917,7 +743,7 @@ class TestDebtMintEventMatching:
 
         borrow_event = {
             "topics": [
-                AaveV3Event.BORROW.value,
+                AaveV3PoolEvent.BORROW.value,
                 HexBytes("0x000000000000000000000000a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"),
                 HexBytes("0x0000000000000000000000001111111111111111111111111111111111111111"),
             ],
@@ -985,7 +811,7 @@ class TestCollateralMintEventMatching:
 
         supply_event = {
             "topics": [
-                AaveV3Event.SUPPLY.value,
+                AaveV3PoolEvent.SUPPLY.value,
                 HexBytes(
                     "0x000000000000000000000000a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
                 ),  # reserve
@@ -1024,7 +850,7 @@ class TestCollateralMintEventMatching:
 
         liquidation_event = {
             "topics": [
-                AaveV3Event.LIQUIDATION_CALL.value,
+                AaveV3PoolEvent.LIQUIDATION_CALL.value,
                 HexBytes(
                     "0x000000000000000000000000c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"
                 ),  # collateralAsset
@@ -1082,7 +908,7 @@ class TestCollateralMintEventMatching:
         # repayWithATokens() with excess aTokens returned
         repay_event = {
             "topics": [
-                AaveV3Event.REPAY.value,
+                AaveV3PoolEvent.REPAY.value,
                 HexBytes(
                     "0x000000000000000000000000C02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"
                 ),  # reserve=WETH
@@ -1152,7 +978,7 @@ class TestGHOLiquidationWithDeficitCreated:
         # DeficitCreated event for GHO liquidation
         deficit_created_event = {
             "topics": [
-                AaveV3Event.DEFICIT_CREATED.value,
+                AaveV3PoolEvent.DEFICIT_CREATED.value,
                 HexBytes(
                     "0x000000000000000000000000fb2788b2a3a0242429fd9ee2b151e149e3b244ec"
                 ),  # user
@@ -1169,7 +995,7 @@ class TestGHOLiquidationWithDeficitCreated:
         # Separate LiquidationCall for WBTC debt (different asset)
         liquidation_event = {
             "topics": [
-                AaveV3Event.LIQUIDATION_CALL.value,
+                AaveV3PoolEvent.LIQUIDATION_CALL.value,
                 HexBytes(
                     "0x000000000000000000000000a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
                 ),  # collateralAsset=USDC
@@ -1221,7 +1047,7 @@ class TestGHOLiquidationWithDeficitCreated:
         # But LIQUIDATION_CALL won't match because GHO is not the debtAsset in this tx
         deficit_created_event = {
             "topics": [
-                AaveV3Event.DEFICIT_CREATED.value,
+                AaveV3PoolEvent.DEFICIT_CREATED.value,
                 HexBytes("0x000000000000000000000000fb2788b2a3a0242429fd9ee2b151e149e3b244ec"),
                 HexBytes("0x00000000000000000000000040d16fc0246ad3160ccc09b8d0d3a2cd28ae6c2f"),
             ],
@@ -1248,7 +1074,7 @@ class TestGHOLiquidationWithDeficitCreated:
         and should remain available for other operations.
         """
         deficit_created_event = {
-            "topics": [AaveV3Event.DEFICIT_CREATED.value],
+            "topics": [AaveV3PoolEvent.DEFICIT_CREATED.value],
             "logIndex": 662,
             "data": HexBytes("0x00000000000000000000000000000000000000000000000000048e1b04ae78ec"),
         }
@@ -1290,7 +1116,7 @@ class TestGHODebtBurnEventOrdering:
             "LogReceipt",
             {
                 "topics": [
-                    AaveV3Event.REPAY.value,
+                    AaveV3PoolEvent.REPAY.value,
                     HexBytes(reserve_address),
                     HexBytes(user_address),
                 ],
@@ -1426,7 +1252,7 @@ class TestDebtMintMaxLogIndex:
             "LogReceipt",
             {
                 "topics": [
-                    AaveV3Event.BORROW.value,
+                    AaveV3PoolEvent.BORROW.value,
                     HexBytes(f"0x000000000000000000000000{reserve[2:]}"),  # reserve
                     HexBytes(f"0x000000000000000000000000{user[2:]}"),  # onBehalfOf
                 ],

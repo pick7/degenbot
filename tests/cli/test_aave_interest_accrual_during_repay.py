@@ -4,8 +4,8 @@ import pytest
 from eth_abi.abi import encode
 from hexbytes import HexBytes
 
+from degenbot.aave.events import AaveV3PoolEvent, AaveV3ScaledTokenEvent
 from degenbot.cli.aave_transaction_operations import (
-    AaveV3Event,
     OperationType,
     TransactionOperationsParser,
 )
@@ -55,7 +55,7 @@ class TestInterestAccrualDuringRepay:
         mint_event = {
             "address": v_token,
             "topics": [
-                AaveV3Event.SCALED_TOKEN_MINT.value,
+                AaveV3ScaledTokenEvent.MINT.value,
                 HexBytes(
                     encode(
                         types=["address"],
@@ -87,7 +87,7 @@ class TestInterestAccrualDuringRepay:
         repay_event = {
             "address": pool,
             "topics": [
-                AaveV3Event.REPAY.value,
+                AaveV3PoolEvent.REPAY.value,
                 HexBytes(
                     encode(
                         types=["address"],

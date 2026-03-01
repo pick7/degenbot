@@ -14,8 +14,8 @@ from unittest.mock import MagicMock
 from hexbytes import HexBytes
 
 from degenbot.checksum_cache import get_checksum_address
+from degenbot.aave.events import AaveV3PoolEvent
 from degenbot.cli.aave_event_matching import (
-    AaveV3Event,
     EventMatcher,
     ScaledTokenEventType,
 )
@@ -51,7 +51,7 @@ class TestSwapAndRepayMatching:
         withdraw_event = {
             "address": get_checksum_address("0x87870bca3f3fd6335c3f4ce8392d69350b4fa4e2"),
             "topics": [
-                AaveV3Event.WITHDRAW.value,
+                AaveV3PoolEvent.WITHDRAW.value,
                 HexBytes(reserve),
                 HexBytes(caller),
             ],
@@ -65,7 +65,7 @@ class TestSwapAndRepayMatching:
         supply_event = {
             "address": get_checksum_address("0x87870bca3f3fd6335c3f4ce8392d69350b4fa4e2"),
             "topics": [
-                AaveV3Event.SUPPLY.value,
+                AaveV3PoolEvent.SUPPLY.value,
                 HexBytes(reserve),
                 HexBytes(caller),
                 HexBytes(ZERO_32),
@@ -94,7 +94,7 @@ class TestSwapAndRepayMatching:
             user_address=caller,
             reserve_address=reserve,
             check_users=[user],
-            try_event_type_first=AaveV3Event.WITHDRAW,
+            try_event_type_first=AaveV3PoolEvent.WITHDRAW,
         )
 
         # Should find the WITHDRAW event
@@ -117,7 +117,7 @@ class TestSwapAndRepayMatching:
         withdraw_event = {
             "address": get_checksum_address("0x87870bca3f3fd6335c3f4ce8392d69350b4fa4e2"),
             "topics": [
-                AaveV3Event.WITHDRAW.value,
+                AaveV3PoolEvent.WITHDRAW.value,
                 HexBytes(reserve),
                 HexBytes(caller),
             ],
@@ -131,7 +131,7 @@ class TestSwapAndRepayMatching:
         supply_event = {
             "address": get_checksum_address("0x87870bca3f3fd6335c3f4ce8392d69350b4fa4e2"),
             "topics": [
-                AaveV3Event.SUPPLY.value,
+                AaveV3PoolEvent.SUPPLY.value,
                 HexBytes(reserve),
                 HexBytes(caller),
                 HexBytes(ZERO_32),
@@ -157,7 +157,7 @@ class TestSwapAndRepayMatching:
             user_address=caller,
             reserve_address=reserve,
             check_users=[user],
-            try_event_type_first=AaveV3Event.WITHDRAW,
+            try_event_type_first=AaveV3PoolEvent.WITHDRAW,
         )
 
         # Second, supply mint (value > balanceIncrease) should match SUPPLY
@@ -184,7 +184,7 @@ class TestSwapAndRepayMatching:
         withdraw_event = {
             "address": get_checksum_address("0x87870bca3f3fd6335c3f4ce8392d69350b4fa4e2"),
             "topics": [
-                AaveV3Event.WITHDRAW.value,
+                AaveV3PoolEvent.WITHDRAW.value,
                 HexBytes(reserve),
                 HexBytes(user),
             ],
@@ -198,7 +198,7 @@ class TestSwapAndRepayMatching:
         supply_event = {
             "address": get_checksum_address("0x87870bca3f3fd6335c3f4ce8392d69350b4fa4e2"),
             "topics": [
-                AaveV3Event.SUPPLY.value,
+                AaveV3PoolEvent.SUPPLY.value,
                 HexBytes(reserve),
                 HexBytes(user),
                 HexBytes(ZERO_32),
@@ -234,6 +234,6 @@ class TestSwapAndRepayMatching:
             event_type=ScaledTokenEventType.COLLATERAL_MINT,
             user_address=user,
             reserve_address=reserve,
-            try_event_type_first=AaveV3Event.WITHDRAW,
+            try_event_type_first=AaveV3PoolEvent.WITHDRAW,
         )
         assert result2["pool_event"]["logIndex"] == 100, "Should match WITHDRAW when specified"

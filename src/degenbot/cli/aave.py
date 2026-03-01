@@ -19,6 +19,14 @@ from web3.exceptions import ContractLogicError
 from web3.types import LogReceipt
 
 from degenbot.aave.deployments import EthereumMainnetAaveV3
+from degenbot.aave.events import (
+    AaveV3GhoDebtTokenEvent,
+    AaveV3PoolConfigEvent,
+    AaveV3PoolEvent,
+    AaveV3ScaledTokenEvent,
+    AaveV3StkAaveEvent,
+    ERC20Event,
+)
 from degenbot.aave.libraries.wad_ray_math import wad_mul
 from degenbot.aave.processors import (
     CollateralBurnEvent,
@@ -31,7 +39,6 @@ from degenbot.aave.processors import (
 from degenbot.checksum_cache import get_checksum_address
 from degenbot.cli import cli
 from degenbot.cli.aave_debug_logger import aave_debug_logger
-from degenbot.cli.aave_event_matching import AaveV3Event as EventMatcherAaveV3Event
 from degenbot.cli.aave_event_matching import (
     EventMatcher,
     OperationAwareEventMatcher,
@@ -427,65 +434,12 @@ def _init_verbose_config_from_env() -> None:
 _init_verbose_config_from_env()
 
 
-class AaveV3Event(Enum):
-    """Aave V3 event topic hashes."""
-
-    SCALED_TOKEN_MINT = HexBytes(
-        "0x458f5fa412d0f69b08dd84872b0215675cc67bc1d5b6fd93300a1c3878b86196"
-    )
-    SCALED_TOKEN_BURN = HexBytes(
-        "0x4cf25bc1d991c17529c25213d3cc0cda295eeaad5f13f361969b12ea48015f90"
-    )
-    SCALED_TOKEN_BALANCE_TRANSFER = HexBytes(
-        "0x4beccb90f994c31aced7a23b5611020728a23d8ec5cddd1a3e9d97b96fda8666"
-    )
-    RESERVE_DATA_UPDATED = HexBytes(
-        "0x804c9b842b2748a22bb64b345453a3de7ca54a6ca45ce00d415894979e22897a"
-    )
-    RESERVE_INITIALIZED = HexBytes(
-        "0x3a0ca721fc364424566385a1aa271ed508cc2c0949c2272575fb3013a163a45f"
-    )
-    USER_E_MODE_SET = HexBytes("0xd728da875fc88944cbf17638bcbe4af0eedaef63becd1d1c57cc097eb4608d84")
-    POOL_CONFIGURATOR_UPDATED = HexBytes(
-        "0x8932892569eba59c8382a089d9b732d1f49272878775235761a2a6b0309cd465"
-    )
-    POOL_DATA_PROVIDER_UPDATED = HexBytes(
-        "0xc853974cfbf81487a14a23565917bee63f527853bcb5fa54f2ae1cdf8a38356d"
-    )
-    POOL_UPDATED = HexBytes("0x90affc163f1a2dfedcd36aa02ed992eeeba8100a4014f0b4cdc20ea265a66627")
-    UPGRADED = HexBytes("0xbc7cd75a20ee27fd9adebab32041f755214dbc6bffa90cc0225b39da2e5c2d3b")
-    DISCOUNT_RATE_STRATEGY_UPDATED = HexBytes(
-        "0x194bd59f47b230edccccc2be58b92dde3a5dadd835751a621af59006928bccef"
-    )
-    DISCOUNT_TOKEN_UPDATED = HexBytes(
-        "0x6b489e1dbfbe36f55c511c098bcc9d92fec7f04f74ceb75018697ab68f7d3529"
-    )
-    DISCOUNT_PERCENT_UPDATED = HexBytes(
-        "0x74ab9665e7c36c29ddb78ef88a3e2eac73d35b8b16de7bc573e313e320104956"
-    )
-    STAKED = HexBytes("0x6c86f3fd5118b3aa8bb4f389a617046de0a3d3d477de1a1673d227f802f616dc")
-    REDEEM = HexBytes("0x3f693fff038bb8a046aa76d9516190ac7444f7d69cf952c4cbdc086fdef2d6fc")
-    ERC20_TRANSFER = HexBytes("0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef")
-    SLASHED = HexBytes("0x4ed05e9673c26d2ed44f7ef6a7f2942df0ee3b5e1e17db4b99f9dcd261a339cd")
-    PROXY_CREATED = HexBytes("0x4a465a9bd819d9662563c1e11ae958f8109e437e7f4bf1c6ef0b9a7b3f35d478")
-    # Pool contract events
-    SUPPLY = HexBytes("0x2b627736bca15cd5381dcf80b0bf11fd197d01a037c52b927a881a10fb73ba61")
-    WITHDRAW = HexBytes("0x3115d1449a7b732c986cba18244e897a450f61e1bb8d589cd2e69e6c8924f9f7")
-    BORROW = HexBytes("0xb3d084820fb1a9decffb176436bd02558d15fac9b0ddfed8c465bc7359d7dce0")
-    REPAY = HexBytes("0xa534c8dbe71f871f9f3530e97a74601fea17b426cae02e1c5aee42c96c784051")
-    LIQUIDATION_CALL = HexBytes(
-        "0xe413a321e8681d831f4dbccbca790d2952b56f977908e45be37335533e005286"
-    )
-    DEFICIT_CREATED = HexBytes("0x2bccfb3fad376d59d7accf970515eb77b2f27b082c90ed0fb15583dd5a942699")
-    ADDRESS_SET = HexBytes("0x9ef0e8c8e52743bb38b83b17d9429141d494b8041ca6d616a6c77cebae9cd8b7")
-
-
 # Events that trigger transaction-level processing
 TRIGGER_EVENTS: set[HexBytes] = {
-    AaveV3Event.SCALED_TOKEN_MINT.value,
-    AaveV3Event.SCALED_TOKEN_BURN.value,
-    AaveV3Event.SCALED_TOKEN_BALANCE_TRANSFER.value,
-    AaveV3Event.ERC20_TRANSFER.value,
+    AaveV3ScaledTokenEvent.MINT.value,
+    AaveV3ScaledTokenEvent.BURN.value,
+    AaveV3ScaledTokenEvent.BALANCE_TRANSFER.value,
+    ERC20Event.TRANSFER.value,
 }
 
 
@@ -537,17 +491,17 @@ def _extract_user_addresses_from_event(event: LogReceipt) -> set[ChecksumAddress
     user_addresses: set[ChecksumAddress] = set()
     topic = event["topics"][0]
 
-    if topic == AaveV3Event.SCALED_TOKEN_MINT.value:
+    if topic == AaveV3ScaledTokenEvent.MINT.value:
         user_addresses.add(_decode_address(event["topics"][2]))
 
-    elif topic == AaveV3Event.SCALED_TOKEN_BURN.value:
+    elif topic == AaveV3ScaledTokenEvent.BURN.value:
         user_addresses.add(_decode_address(event["topics"][1]))
 
-    elif topic == AaveV3Event.SCALED_TOKEN_BALANCE_TRANSFER.value:
+    elif topic == AaveV3ScaledTokenEvent.BALANCE_TRANSFER.value:
         user_addresses.add(_decode_address(event["topics"][1]))
         user_addresses.add(_decode_address(event["topics"][2]))
 
-    elif topic == AaveV3Event.ERC20_TRANSFER.value:
+    elif topic == ERC20Event.TRANSFER.value:
         from_addr = _decode_address(event["topics"][1])
         to_addr = _decode_address(event["topics"][2])
         if from_addr != ZERO_ADDRESS:
@@ -556,24 +510,24 @@ def _extract_user_addresses_from_event(event: LogReceipt) -> set[ChecksumAddress
             user_addresses.add(to_addr)
 
     elif topic in {
-        AaveV3Event.DISCOUNT_PERCENT_UPDATED.value,
-        AaveV3Event.USER_E_MODE_SET.value,
-        AaveV3Event.DEFICIT_CREATED.value,
+        AaveV3GhoDebtTokenEvent.DISCOUNT_PERCENT_UPDATED.value,
+        AaveV3PoolEvent.USER_E_MODE_SET.value,
+        AaveV3PoolEvent.DEFICIT_CREATED.value,
     }:
         user_addresses.add(_decode_address(event["topics"][1]))
 
     elif topic in {
-        AaveV3Event.BORROW.value,
-        AaveV3Event.REPAY.value,
-        AaveV3Event.SUPPLY.value,
-        AaveV3Event.WITHDRAW.value,
+        AaveV3PoolEvent.BORROW.value,
+        AaveV3PoolEvent.REPAY.value,
+        AaveV3PoolEvent.SUPPLY.value,
+        AaveV3PoolEvent.WITHDRAW.value,
     }:
         user_addresses.add(_decode_address(event["topics"][2]))
 
-    elif topic == AaveV3Event.LIQUIDATION_CALL.value:
+    elif topic == AaveV3PoolEvent.LIQUIDATION_CALL.value:
         user_addresses.add(_decode_address(event["topics"][3]))
 
-    elif topic in {AaveV3Event.STAKED.value, AaveV3Event.REDEEM.value}:
+    elif topic in {AaveV3StkAaveEvent.STAKED.value, AaveV3StkAaveEvent.REDEEM.value}:
         user_addresses.add(_decode_address(event["topics"][1]))
         user_addresses.add(_decode_address(event["topics"][2]))
 
@@ -2374,7 +2328,7 @@ def _process_transaction_with_context(
     # Track all updates with their log indices to handle multiple updates per transaction
     for event in tx_context.events:
         topic = event["topics"][0]
-        if topic == AaveV3Event.DISCOUNT_PERCENT_UPDATED.value:
+        if topic == AaveV3GhoDebtTokenEvent.DISCOUNT_PERCENT_UPDATED.value:
             user_address = _decode_address(event["topics"][1])
             (old_discount_percent,) = eth_abi.abi.decode(types=["uint256"], data=event["data"])
             tx_context.discount_updated_users.add(user_address)
@@ -2399,14 +2353,14 @@ def _process_transaction_with_context(
         if (
             topic
             in {
-                AaveV3Event.SCALED_TOKEN_MINT.value,
-                AaveV3Event.SCALED_TOKEN_BURN.value,
+                AaveV3ScaledTokenEvent.MINT.value,
+                AaveV3ScaledTokenEvent.BURN.value,
             }
             and event_address == GHO_VARIABLE_DEBT_TOKEN_ADDRESS
         ):
             # Mint event: topics[1] = caller, topics[2] = onBehalfOf (user)
             # Burn event: topics[1] = from (user), topics[2] = target
-            if topic == AaveV3Event.SCALED_TOKEN_MINT.value:
+            if topic == AaveV3ScaledTokenEvent.MINT.value:
                 user_address = _decode_address(event["topics"][2])
             else:  # SCALED_TOKEN_BURN
                 user_address = _decode_address(event["topics"][1])
@@ -2479,7 +2433,7 @@ def _process_transaction_with_context(
     # See debug/aave/0008 for details on this index synchronization issue.
     for event in tx_context.events:
         topic = event["topics"][0]
-        if topic == AaveV3Event.RESERVE_DATA_UPDATED.value:
+        if topic == AaveV3PoolEvent.RESERVE_DATA_UPDATED.value:
             event_address = get_checksum_address(event["address"])
             context = EventHandlerContext(
                 w3=w3,
@@ -2498,7 +2452,7 @@ def _process_transaction_with_context(
         event_address = get_checksum_address(event["address"])
 
         # Skip ReserveDataUpdated events - already processed in first pass
-        if topic == AaveV3Event.RESERVE_DATA_UPDATED.value:
+        if topic == AaveV3PoolEvent.RESERVE_DATA_UPDATED.value:
             continue
 
         context = EventHandlerContext(
@@ -2512,25 +2466,25 @@ def _process_transaction_with_context(
         )
 
         # Dispatch to appropriate handler
-        if topic == AaveV3Event.ERC20_TRANSFER.value and event_address == (
+        if topic == ERC20Event.TRANSFER.value and event_address == (
             gho_asset.v_gho_discount_token if gho_asset else None
         ):
             _process_stk_aave_transfer_event(context)
-        elif topic == AaveV3Event.DISCOUNT_PERCENT_UPDATED.value:
+        elif topic == AaveV3GhoDebtTokenEvent.DISCOUNT_PERCENT_UPDATED.value:
             _process_discount_percent_updated_event(context)
-        elif topic == AaveV3Event.SCALED_TOKEN_MINT.value:
+        elif topic == AaveV3ScaledTokenEvent.MINT.value:
             _process_scaled_token_mint_event(context)
-        elif topic == AaveV3Event.SCALED_TOKEN_BURN.value:
+        elif topic == AaveV3ScaledTokenEvent.BURN.value:
             _process_scaled_token_burn_event(context)
-        elif topic == AaveV3Event.SCALED_TOKEN_BALANCE_TRANSFER.value:
+        elif topic == AaveV3ScaledTokenEvent.BALANCE_TRANSFER.value:
             _process_scaled_token_balance_transfer_event(context)
-        elif topic == AaveV3Event.USER_E_MODE_SET.value:
+        elif topic == AaveV3PoolEvent.USER_E_MODE_SET.value:
             _process_user_e_mode_set_event(context)
-        elif topic == AaveV3Event.UPGRADED.value:
+        elif topic == AaveV3PoolConfigEvent.UPGRADED.value:
             _process_scaled_token_upgrade_event(context)
-        elif topic == AaveV3Event.DISCOUNT_RATE_STRATEGY_UPDATED.value:
+        elif topic == AaveV3GhoDebtTokenEvent.DISCOUNT_RATE_STRATEGY_UPDATED.value:
             _process_discount_rate_strategy_updated_event(context)
-        elif topic == AaveV3Event.DISCOUNT_TOKEN_UPDATED.value:
+        elif topic == AaveV3GhoDebtTokenEvent.DISCOUNT_TOKEN_UPDATED.value:
             _process_discount_token_updated_event(context)
 
     # Log transaction completion
@@ -2661,19 +2615,19 @@ def _process_transaction_with_operations(
         )
 
         # Dispatch to appropriate handler for non-operation events
-        if topic == AaveV3Event.RESERVE_DATA_UPDATED.value:
+        if topic == AaveV3PoolEvent.RESERVE_DATA_UPDATED.value:
             _process_reserve_data_update_event(context)
-        elif topic == AaveV3Event.USER_E_MODE_SET.value:
+        elif topic == AaveV3PoolEvent.USER_E_MODE_SET.value:
             _process_user_e_mode_set_event(context)
-        elif topic == AaveV3Event.UPGRADED.value:
+        elif topic == AaveV3PoolConfigEvent.UPGRADED.value:
             _process_scaled_token_upgrade_event(context)
-        elif topic == AaveV3Event.DISCOUNT_PERCENT_UPDATED.value:
+        elif topic == AaveV3GhoDebtTokenEvent.DISCOUNT_PERCENT_UPDATED.value:
             _process_discount_percent_updated_event(context)
-        elif topic == AaveV3Event.DISCOUNT_TOKEN_UPDATED.value:
+        elif topic == AaveV3GhoDebtTokenEvent.DISCOUNT_TOKEN_UPDATED.value:
             _process_discount_token_updated_event(context)
-        elif topic == AaveV3Event.DISCOUNT_RATE_STRATEGY_UPDATED.value:
+        elif topic == AaveV3GhoDebtTokenEvent.DISCOUNT_RATE_STRATEGY_UPDATED.value:
             _process_discount_rate_strategy_updated_event(context)
-        elif topic == AaveV3Event.ERC20_TRANSFER.value and event_address == (
+        elif topic == ERC20Event.TRANSFER.value and event_address == (
             gho_asset.v_gho_discount_token if gho_asset else None
         ):
             _process_stk_aave_transfer_event(context)
@@ -3678,7 +3632,7 @@ def _process_staked_aave_event(
     )
 
     match discount_token_info_event["topics"][0]:
-        case AaveV3Event.STAKED.value:
+        case AaveV3StkAaveEvent.STAKED.value:
             return _process_aave_stake(
                 context,
                 discount_token=discount_token,
@@ -3690,7 +3644,7 @@ def _process_staked_aave_event(
                 triggering_event=discount_token_info_event,
                 current_index=current_global_index,
             )
-        case AaveV3Event.REDEEM.value:
+        case AaveV3StkAaveEvent.REDEEM.value:
             return _process_aave_redeem(
                 context,
                 discount_token=discount_token,
@@ -3702,7 +3656,7 @@ def _process_staked_aave_event(
                 triggering_event=discount_token_info_event,
                 current_index=current_global_index,
             )
-        case AaveV3Event.ERC20_TRANSFER.value:
+        case ERC20Event.TRANSFER.value:
             return _process_staked_aave_transfer(
                 context,
                 discount_token=discount_token,
@@ -4588,7 +4542,7 @@ def _process_collateral_mint_event(
                 user_address=caller_address,  # Try caller first for withdraw
                 reserve_address=reserve_address,
                 check_users=[user.address],
-                try_event_type_first=EventMatcherAaveV3Event.WITHDRAW,  # Try WITHDRAW before SUPPLY
+                try_event_type_first=AaveV3PoolEvent.WITHDRAW,  # Try WITHDRAW before SUPPLY
             )
 
         if result is not None:
@@ -4628,7 +4582,7 @@ def _process_collateral_mint_event(
     scaled_amount: int | None = None
     if (
         matched_pool_event is not None
-        and matched_pool_event["topics"][0] == AaveV3Event.SUPPLY.value
+        and matched_pool_event["topics"][0] == AaveV3PoolEvent.SUPPLY.value
     ):
         # Use extracted raw_amount from EventMatcher
         raw_amount = extraction_data["raw_amount"]
@@ -4740,7 +4694,7 @@ def _process_gho_debt_mint_event(
         if (
             result is not None
             and result["pool_event"] is not None
-            and result["pool_event"]["topics"][0] == AaveV3Event.BORROW.value
+            and result["pool_event"]["topics"][0] == AaveV3PoolEvent.BORROW.value
         ):
             borrow_amount = result["extraction_data"]["raw_amount"]
             pool_processor = PoolProcessorFactory.get_pool_processor_for_token_revision(
@@ -4960,7 +4914,7 @@ def _process_standard_debt_mint_event(
         if (
             result is not None
             and result["pool_event"] is not None
-            and result["pool_event"]["topics"][0] == AaveV3Event.BORROW.value
+            and result["pool_event"]["topics"][0] == AaveV3PoolEvent.BORROW.value
         ):
             borrow_amount = result["extraction_data"]["raw_amount"]
             pool_processor = PoolProcessorFactory.get_pool_processor_for_token_revision(
@@ -5212,14 +5166,14 @@ def _process_collateral_burn_event(
             collateral_asset.a_token_revision
         )
 
-        if pool_event_topic == AaveV3Event.WITHDRAW.value:
+        if pool_event_topic == AaveV3PoolEvent.WITHDRAW.value:
             # WITHDRAW event: use raw_amount
             raw_amount = extraction_data["raw_amount"]
             scaled_amount = pool_processor.calculate_collateral_burn_scaled_amount(
                 amount=raw_amount,
                 liquidity_index=index,
             )
-        elif pool_event_topic == AaveV3Event.LIQUIDATION_CALL.value:
+        elif pool_event_topic == AaveV3PoolEvent.LIQUIDATION_CALL.value:
             # LIQUIDATION_CALL event: use liquidated_collateral amount
             liquidated_amount = extraction_data["liquidated_collateral"]
             scaled_amount = pool_processor.calculate_collateral_burn_scaled_amount(
@@ -5471,7 +5425,7 @@ def _process_standard_debt_burn_event(
         extraction_data = result["extraction_data"]
         pool_event_topic = result["pool_event"]["topics"][0]
 
-        if pool_event_topic == AaveV3Event.REPAY.value:
+        if pool_event_topic == AaveV3PoolEvent.REPAY.value:
             payback_amount = extraction_data["raw_amount"]
             # EventMatcher already handles consumption based on useATokens flag
 
@@ -5483,13 +5437,13 @@ def _process_standard_debt_burn_event(
                 amount=payback_amount,
                 borrow_index=index,
             )
-        elif pool_event_topic == AaveV3Event.LIQUIDATION_CALL.value:
+        elif pool_event_topic == AaveV3PoolEvent.LIQUIDATION_CALL.value:
             # For liquidations, do NOT calculate scaled amount from debt_to_cover.
             # The actual burn amount in the Burn event may differ from debt_to_cover
             # due to interest accrual. Let the processor calculate from actual event values.
             # See debug report for details.
             pass
-        elif pool_event_topic == AaveV3Event.DEFICIT_CREATED.value:
+        elif pool_event_topic == AaveV3PoolEvent.DEFICIT_CREATED.value:
             payback_amount = extraction_data["amount_created"]
 
             # Calculate scaled amount using the original amount
@@ -5744,7 +5698,7 @@ def _process_scaled_token_balance_transfer_event(
     if context.tx_context is not None:
         for prior_event in context.tx_context.get_prior_events(context.event):
             prior_topic = prior_event["topics"][0]
-            if prior_topic == AaveV3Event.SCALED_TOKEN_MINT.value:
+            if prior_topic == AaveV3ScaledTokenEvent.MINT.value:
                 # Check if this Mint event has value == balanceIncrease (pure interest)
                 prior_value, prior_balance_increase, prior_index = _decode_uint_values(
                     event=prior_event, num_values=3
@@ -5783,7 +5737,7 @@ def _process_scaled_token_balance_transfer_event(
         for subsequent_event in subsequent_events[:5]:
             subsequent_topic = subsequent_event["topics"][0]
             if (
-                subsequent_topic == AaveV3Event.SCALED_TOKEN_BURN.value
+                subsequent_topic == AaveV3ScaledTokenEvent.BURN.value
                 and _decode_address(subsequent_event["topics"][1]) == to_address
             ):
                 # The recipient burns the tokens immediately after receiving them
@@ -5850,14 +5804,14 @@ def _fetch_pool_events(
         address=[pool_address],
         topic_signature=[
             [
-                AaveV3Event.SUPPLY.value,
-                AaveV3Event.WITHDRAW.value,
-                AaveV3Event.BORROW.value,
-                AaveV3Event.REPAY.value,
-                AaveV3Event.LIQUIDATION_CALL.value,
-                AaveV3Event.DEFICIT_CREATED.value,
-                AaveV3Event.RESERVE_DATA_UPDATED.value,
-                AaveV3Event.USER_E_MODE_SET.value,
+                AaveV3PoolEvent.SUPPLY.value,
+                AaveV3PoolEvent.WITHDRAW.value,
+                AaveV3PoolEvent.BORROW.value,
+                AaveV3PoolEvent.REPAY.value,
+                AaveV3PoolEvent.LIQUIDATION_CALL.value,
+                AaveV3PoolEvent.DEFICIT_CREATED.value,
+                AaveV3PoolEvent.RESERVE_DATA_UPDATED.value,
+                AaveV3PoolEvent.USER_E_MODE_SET.value,
             ]
         ],
     )
@@ -5876,7 +5830,7 @@ def _fetch_reserve_initialization_events(
         start_block=start_block,
         end_block=end_block,
         address=[configurator_address],
-        topic_signature=[[AaveV3Event.RESERVE_INITIALIZED.value]],
+        topic_signature=[[AaveV3PoolEvent.RESERVE_INITIALIZED.value]],
     )
 
 
@@ -5897,13 +5851,13 @@ def _fetch_scaled_token_events(
         address=token_addresses,
         topic_signature=[
             [
-                AaveV3Event.SCALED_TOKEN_MINT.value,
-                AaveV3Event.SCALED_TOKEN_BURN.value,
-                AaveV3Event.SCALED_TOKEN_BALANCE_TRANSFER.value,
-                AaveV3Event.UPGRADED.value,
-                AaveV3Event.DISCOUNT_PERCENT_UPDATED.value,
+                AaveV3ScaledTokenEvent.MINT.value,
+                AaveV3ScaledTokenEvent.BURN.value,
+                AaveV3ScaledTokenEvent.BALANCE_TRANSFER.value,
+                AaveV3PoolConfigEvent.UPGRADED.value,
+                AaveV3GhoDebtTokenEvent.DISCOUNT_PERCENT_UPDATED.value,
                 # Include ERC20 Transfer events for proper paired transfer matching
-                AaveV3Event.ERC20_TRANSFER.value,
+                ERC20Event.TRANSFER.value,
             ]
         ],
     )
@@ -5925,9 +5879,9 @@ def _fetch_stk_aave_events(
         address=[discount_token],
         topic_signature=[
             [
-                AaveV3Event.STAKED.value,
-                AaveV3Event.REDEEM.value,
-                AaveV3Event.ERC20_TRANSFER.value,
+                AaveV3StkAaveEvent.STAKED.value,
+                AaveV3StkAaveEvent.REDEEM.value,
+                ERC20Event.TRANSFER.value,
             ]
         ],
     )
@@ -5950,11 +5904,11 @@ def _fetch_address_provider_events(
         address=[provider_address],
         topic_signature=[
             [
-                AaveV3Event.PROXY_CREATED.value,
-                AaveV3Event.POOL_CONFIGURATOR_UPDATED.value,
-                AaveV3Event.POOL_DATA_PROVIDER_UPDATED.value,
-                AaveV3Event.POOL_UPDATED.value,
-                AaveV3Event.ADDRESS_SET.value,
+                AaveV3PoolConfigEvent.PROXY_CREATED.value,
+                AaveV3PoolConfigEvent.POOL_CONFIGURATOR_UPDATED.value,
+                AaveV3PoolConfigEvent.POOL_DATA_PROVIDER_UPDATED.value,
+                AaveV3PoolConfigEvent.POOL_UPDATED.value,
+                AaveV3PoolConfigEvent.ADDRESS_SET.value,
             ]
         ],
     )
@@ -5972,8 +5926,8 @@ def _fetch_discount_config_events(
         end_block=end_block,
         topic_signature=[
             [
-                AaveV3Event.DISCOUNT_RATE_STRATEGY_UPDATED.value,
-                AaveV3Event.DISCOUNT_TOKEN_UPDATED.value,
+                AaveV3GhoDebtTokenEvent.DISCOUNT_RATE_STRATEGY_UPDATED.value,
+                AaveV3GhoDebtTokenEvent.DISCOUNT_TOKEN_UPDATED.value,
             ]
         ],
     )
@@ -6036,9 +5990,9 @@ def _build_transaction_contexts(
         if (
             topic
             in {
-                AaveV3Event.SCALED_TOKEN_MINT.value,
-                AaveV3Event.SCALED_TOKEN_BURN.value,
-                AaveV3Event.SCALED_TOKEN_BALANCE_TRANSFER.value,
+                AaveV3ScaledTokenEvent.MINT.value,
+                AaveV3ScaledTokenEvent.BURN.value,
+                AaveV3ScaledTokenEvent.BALANCE_TRANSFER.value,
             }
             and event_address == pool_address
         ):
@@ -6048,24 +6002,24 @@ def _build_transaction_contexts(
             continue
 
         if topic in {
-            AaveV3Event.SUPPLY.value,
-            AaveV3Event.WITHDRAW.value,
-            AaveV3Event.BORROW.value,
-            AaveV3Event.REPAY.value,
-            AaveV3Event.LIQUIDATION_CALL.value,
-            AaveV3Event.DEFICIT_CREATED.value,
+            AaveV3PoolEvent.SUPPLY.value,
+            AaveV3PoolEvent.WITHDRAW.value,
+            AaveV3PoolEvent.BORROW.value,
+            AaveV3PoolEvent.REPAY.value,
+            AaveV3PoolEvent.LIQUIDATION_CALL.value,
+            AaveV3PoolEvent.DEFICIT_CREATED.value,
         }:
             logger.debug(
                 f"_build_transaction_contexts: categorized as POOL_EVENT topic={topic.to_0x_hex()}"
             )
             ctx.pool_events.append(event)
-        elif topic == AaveV3Event.STAKED.value:
+        elif topic == AaveV3StkAaveEvent.STAKED.value:
             logger.debug("_build_transaction_contexts: categorized as STAKED event")
             ctx.stk_aave_stakes.append(event)
-        elif topic == AaveV3Event.REDEEM.value:
+        elif topic == AaveV3StkAaveEvent.REDEEM.value:
             logger.debug("_build_transaction_contexts: categorized as REDEEM event")
             ctx.stk_aave_redeems.append(event)
-        elif topic == AaveV3Event.ERC20_TRANSFER.value and event_address == (
+        elif topic == ERC20Event.TRANSFER.value and event_address == (
             gho_asset.v_gho_discount_token if gho_asset else None
         ):
             logger.debug("_build_transaction_contexts: categorized as stkAAVE TRANSFER event")
@@ -6077,7 +6031,7 @@ def _build_transaction_contexts(
                 ctx.stk_aave_transfer_users.add(from_addr)
             if to_addr != ZERO_ADDRESS:
                 ctx.stk_aave_transfer_users.add(to_addr)
-        elif topic == AaveV3Event.SCALED_TOKEN_MINT.value:
+        elif topic == AaveV3ScaledTokenEvent.MINT.value:
             if event_address == GHO_VARIABLE_DEBT_TOKEN_ADDRESS:
                 logger.debug("_build_transaction_contexts: categorized as GHO_MINT event")
                 ctx.gho_mints.append(event)
@@ -6091,7 +6045,7 @@ def _build_transaction_contexts(
                     f"_build_transaction_contexts: categorized as COLLATERAL_MINT event addr={event_address}"
                 )
                 ctx.collateral_mints.append(event)
-        elif topic == AaveV3Event.SCALED_TOKEN_BURN.value:
+        elif topic == AaveV3ScaledTokenEvent.BURN.value:
             if event_address == GHO_VARIABLE_DEBT_TOKEN_ADDRESS:
                 logger.debug("_build_transaction_contexts: categorized as GHO_BURN event")
                 ctx.gho_burns.append(event)
@@ -6105,26 +6059,26 @@ def _build_transaction_contexts(
                     f"_build_transaction_contexts: categorized as COLLATERAL_BURN event addr={event_address}"
                 )
                 ctx.collateral_burns.append(event)
-        elif topic == AaveV3Event.SCALED_TOKEN_BALANCE_TRANSFER.value:
+        elif topic == AaveV3ScaledTokenEvent.BALANCE_TRANSFER.value:
             logger.debug("_build_transaction_contexts: categorized as BALANCE_TRANSFER event")
             ctx.balance_transfers.append(event)
         elif topic in {
-            AaveV3Event.DISCOUNT_PERCENT_UPDATED.value,
-            AaveV3Event.DISCOUNT_RATE_STRATEGY_UPDATED.value,
-            AaveV3Event.DISCOUNT_TOKEN_UPDATED.value,
+            AaveV3GhoDebtTokenEvent.DISCOUNT_PERCENT_UPDATED.value,
+            AaveV3GhoDebtTokenEvent.DISCOUNT_RATE_STRATEGY_UPDATED.value,
+            AaveV3GhoDebtTokenEvent.DISCOUNT_TOKEN_UPDATED.value,
         }:
             logger.debug("_build_transaction_contexts: categorized as DISCOUNT_UPDATE event")
             ctx.discount_updates.append(event)
-        elif topic == AaveV3Event.RESERVE_DATA_UPDATED.value:
+        elif topic == AaveV3PoolEvent.RESERVE_DATA_UPDATED.value:
             logger.debug("_build_transaction_contexts: categorized as RESERVE_DATA_UPDATE event")
             ctx.reserve_data_updates.append(event)
-        elif topic == AaveV3Event.USER_E_MODE_SET.value:
+        elif topic == AaveV3PoolEvent.USER_E_MODE_SET.value:
             logger.debug("_build_transaction_contexts: categorized as USER_E_MODE_SET event")
             ctx.user_e_mode_sets.append(event)
-        elif topic == AaveV3Event.UPGRADED.value:
+        elif topic == AaveV3PoolConfigEvent.UPGRADED.value:
             logger.debug("_build_transaction_contexts: categorized as UPGRADED event")
             ctx.upgraded_events.append(event)
-        elif topic == AaveV3Event.ERC20_TRANSFER.value:
+        elif topic == ERC20Event.TRANSFER.value:
             logger.debug("_build_transaction_contexts: categorized as ERC20_TRANSFER (ignored)")
             # ERC20 Transfer events are fetched for paired Transfer/BalanceTransfer matching
             # They are processed by the operation parser, not categorized here
@@ -6172,9 +6126,9 @@ def _get_stk_aave_classifying_events(
 
     # Sort by priority
     priority = {
-        AaveV3Event.STAKED.value: 0,
-        AaveV3Event.REDEEM.value: 0,
-        AaveV3Event.ERC20_TRANSFER.value: 1,
+        AaveV3StkAaveEvent.STAKED.value: 0,
+        AaveV3StkAaveEvent.REDEEM.value: 0,
+        ERC20Event.TRANSFER.value: 1,
     }
     events.sort(key=lambda e: priority.get(e["topics"][0], 2))
 
@@ -6218,7 +6172,7 @@ def update_aave_market(
     ):
         topic = event["topics"][0]
 
-        if topic == AaveV3Event.PROXY_CREATED.value:
+        if topic == AaveV3PoolConfigEvent.PROXY_CREATED.value:
             _process_proxy_creation_event(
                 w3=w3,
                 session=session,
@@ -6237,7 +6191,7 @@ def update_aave_market(
                 proxy_id=eth_abi.abi.encode(["bytes32"], [b"POOL_CONFIGURATOR"]),
                 revision_function_prototype="CONFIGURATOR_REVISION",
             )
-        elif topic == AaveV3Event.POOL_UPDATED.value:
+        elif topic == AaveV3PoolConfigEvent.POOL_UPDATED.value:
             _update_contract_revision(
                 w3=w3,
                 market=market,
@@ -6245,7 +6199,7 @@ def update_aave_market(
                 new_address=_decode_address(event["topics"][2]),
                 revision_function_prototype="POOL_REVISION",
             )
-        elif topic == AaveV3Event.POOL_CONFIGURATOR_UPDATED.value:
+        elif topic == AaveV3PoolConfigEvent.POOL_CONFIGURATOR_UPDATED.value:
             _update_contract_revision(
                 w3=w3,
                 market=market,
@@ -6253,7 +6207,7 @@ def update_aave_market(
                 new_address=_decode_address(event["topics"][2]),
                 revision_function_prototype="CONFIGURATOR_REVISION",
             )
-        elif topic == AaveV3Event.POOL_DATA_PROVIDER_UPDATED.value:
+        elif topic == AaveV3PoolConfigEvent.POOL_DATA_PROVIDER_UPDATED.value:
             (old_pool_data_provider_address,) = eth_abi.abi.decode(
                 types=["address"], data=event["topics"][1]
             )
@@ -6280,7 +6234,7 @@ def update_aave_market(
                 )
                 assert pool_data_provider is not None
                 pool_data_provider.address = new_pool_data_provider_address
-        elif topic == AaveV3Event.ADDRESS_SET.value:
+        elif topic == AaveV3PoolConfigEvent.ADDRESS_SET.value:
             _process_umbrella_creation_event(
                 session=session,
                 market=market,
@@ -6362,7 +6316,7 @@ def update_aave_market(
     if gho_asset is not None:
         for event in discount_config_events:
             topic = event["topics"][0]
-            if topic == AaveV3Event.DISCOUNT_TOKEN_UPDATED.value:
+            if topic == AaveV3GhoDebtTokenEvent.DISCOUNT_TOKEN_UPDATED.value:
                 # Update the discount token directly
                 new_discount_token_address = _decode_address(event["topics"][2])
                 gho_asset.v_gho_discount_token = new_discount_token_address
